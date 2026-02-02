@@ -55,13 +55,19 @@ php -S localhost:8080 dashboard.php
 ./team_db.py --help
 
 # List agents
-./team_db.py agents list
+./team_db.py agent list
 
 # List tasks
-./team_db.py tasks list
+./team_db.py task list
 
 # Create task with template
 ./team_db.py task create "Implement auth" --project PROJ-001 --template feature-dev
+
+# Block task (waiting for info)
+./team_db.py task block T-20260202-001 "Waiting for API key from user"
+
+# Unblock and resume
+./team_db.py task unblock T-20260202-001
 ```
 
 ### 3. Spawn Agent
@@ -81,6 +87,7 @@ php -S localhost:8080 dashboard.php
 
 - **Multi-Agent System:** 12 specialized agents (PM, Dev, QA, UX, etc.)
 - **Task Management:** Create, assign, track tasks with SQLite
+- **Task Statuses:** backlog → todo → in_progress → review → done + blocked
 - **Templates:** PRD, Tech Spec, QA Test Plan, Feature Dev, Bug Fix
 - **Dashboard:** Real-time PHP dashboard with auto-refresh
 - **Health Monitoring:** Cron-based monitoring with Telegram alerts
@@ -102,7 +109,7 @@ Location: `team.db` (SQLite)
 **Tables:**
 - `agents` - Team members & status
 - `projects` - Project definitions
-- `tasks` - Task records with requirements
+- `tasks` - Task records with requirements, blocked_reason
 - `task_history` - Activity log
 - `task_dependencies` - Dependency graph
 
@@ -141,6 +148,40 @@ Available task templates:
 | `feature-dev` | Feature Development |
 | `bug-fix` | Bug Fix |
 
+## 🛑 Auto-Stop Safety (Fix Loop Protection)
+
+To prevent infinite loops and excessive token consumption, tasks are automatically stopped after **10 fix loops**.
+
+### How It Works
+
+1. Each time a task fails and needs fixing, the `fix_loop_count` increments
+2. At loop 10, the task is **automatically blocked** with a clear status message
+3. The agent is released and notified
+4. Manual intervention is required to resume
+
+### Commands
+
+```bash
+# Check fix loop status for all tasks
+python3 orchestrator.py fix-status
+
+# Check specific task
+python3 orchestrator.py fix-status --task T-20260202-001
+
+# Resume auto-stopped task (resets counter to 0)
+python3 orchestrator.py resume-task T-20260202-001 --agent dev
+
+# Manual failure trigger (for testing)
+python3 orchestrator.py handle-failure T-20260202-001 "Build failed"
+```
+
+### Alternative Resume via team_db
+
+```bash
+# This also resets fix_loop_count to 0
+python3 team_db.py task unblock T-20260202-001
+```
+
 ## 🔔 Monitoring
 
 Cron jobs configured for:
@@ -175,5 +216,5 @@ git lfs pull
 
 ---
 
-**Version:** 3.4.4  
-**Last Updated:** 2026-02-02
+**Version:** 3.5.0  
+**Last Updated:** 2026-02-03

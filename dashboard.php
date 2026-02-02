@@ -72,6 +72,46 @@ $activities = fetchAll($db, 'SELECT th.*, t.title as task_title, a.name as agent
     LEFT JOIN agents a ON th.agent_id = a.id 
     ORDER BY th.timestamp DESC LIMIT 20');
 
+// Fetch duration statistics
+$durationStats = fetchOne($db, '
+    SELECT 
+        COUNT(*) as total_completed,
+        ROUND(AVG(actual_duration_minutes), 1) as avg_duration_minutes,
+        MIN(actual_duration_minutes) as min_duration,
+        MAX(actual_duration_minutes) as max_duration
+    FROM tasks 
+    WHERE status = "done" 
+      AND actual_duration_minutes IS NOT NULL
+      AND actual_duration_minutes > 0
+');
+
+$agentDurationStats = fetchAll($db, '
+    SELECT 
+        a.name as agent_name,
+        COUNT(*) as tasks_completed,
+        ROUND(AVG(t.actual_duration_minutes), 1) as avg_duration_minutes
+    FROM tasks t
+    JOIN agents a ON t.assignee_id = a.id
+    WHERE t.status = "done" 
+      AND t.actual_duration_minutes IS NOT NULL
+      AND t.actual_duration_minutes > 0
+    GROUP BY t.assignee_id
+    ORDER BY tasks_completed DESC
+    LIMIT 5
+');
+
+// Format duration helper
+function formatDurationMinutes($minutes) {
+    if (!$minutes || $minutes <= 0) return 'N/A';
+    $minutes = (int) round($minutes); // Convert float to int to avoid deprecation warning
+    $hours = floor($minutes / 60);
+    $mins = $minutes % 60;
+    if ($hours > 0) {
+        return $hours . 'h ' . $mins . 'm';
+    }
+    return $mins . 'm';
+}
+
 // Group tasks by status
 $kanbanColumns = [
     'backlog' => ['label' => 'BACKLOG', 'tasks' => []],
@@ -175,6 +215,7 @@ function getDuration($task) {
     // For done tasks: use actual duration or calculate from started/completed
     if ($status === 'done') {
         if ($actualDuration) {
+            $actualDuration = (int) round($actualDuration);
             $hours = floor($actualDuration / 60);
             $mins = $actualDuration % 60;
             if ($hours > 0) {
@@ -509,6 +550,9 @@ $statConfig = [
             line-height: 1.4;
             flex: 1;
             margin-right: 8px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .kanban-card-id {
             font-size: 0.75rem;
@@ -885,6 +929,47 @@ $statConfig = [
             <?php endif; ?>
         </div>
 
+        <!-- Duration Stats Section -->
+        <?php if ($durationStats && $durationStats['total_completed'] > 0): ?>
+        <div class="section">
+            <h2>⏱️ Task Duration Statistics</h2>
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+                <div class="stat-card">
+                    <div class="stat-value"><?= htmlspecialchars($durationStats['total_completed'] ?? 0) ?></div>
+                    <div class="stat-label">Completed Tasks</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value"><?= formatDurationMinutes($durationStats['avg_duration_minutes']) ?></div>
+                    <div class="stat-label">Average Duration</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value"><?= formatDurationMinutes($durationStats['min_duration']) ?></div>
+                    <div class="stat-label">Fastest Task</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value"><?= formatDurationMinutes($durationStats['max_duration']) ?></div>
+                    <div class="stat-label">Slowest Task</div>
+                </div>
+            </div>
+            <?php if (!empty($agentDurationStats)): ?>
+            <div style="margin-top: 20px;">
+                <h3 style="font-size: 1rem; color: #888; margin-bottom: 10px;">By Agent</h3>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px;">
+                    <?php foreach ($agentDurationStats as $agentStat): ?>
+                    <div style="background: rgba(255, 255, 255, 0.05); padding: 12px; border-radius: 8px;">
+                        <div style="font-weight: 600; color: #00d9ff;"><?= htmlspecialchars($agentStat['agent_name']) ?></div>
+                        <div style="font-size: 0.85rem; color: #888; margin-top: 4px;">
+                            <?= htmlspecialchars($agentStat['tasks_completed']) ?> tasks completed • 
+                            avg <?= formatDurationMinutes($agentStat['avg_duration_minutes']) ?>
+                        </div>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
+
         <!-- Kanban Board Section -->
         <div class="section">
             <h2>📋 Task Kanban Board (<?= count($tasks) ?> tasks)</h2>
@@ -912,7 +997,7 @@ $statConfig = [
                         ?>
                         <div class="kanban-card">
                             <div class="kanban-card-header">
-                                <span class="kanban-card-title"><?= htmlspecialchars($task['title'] ?? 'Untitled') ?></span>
+                                <span class="kanban-card-title" title="<?= htmlspecialchars($task['title'] ?? 'Untitled') ?>"><?= htmlspecialchars($task['title'] ?? 'Untitled') ?></span>
                                 <span class="kanban-card-id">#<?= $task['id'] ?></span>
                             </div>
                             <?php if (!empty($task['project_id'])): 
@@ -1068,8 +1153,9 @@ $statConfig = [
         // Render markdown checklist to HTML
         function renderChecklist(text) {
             if (!text) return '';
-            // Convert markdown checkboxes to HTML with proper line breaks
+            // Convert literal \n to actual newlines, then split
             let html = text
+                .replace(/\\n/g, '\n')
                 .split('\n')
                 .map(line => {
                     line = line.trim();
@@ -1122,16 +1208,18 @@ $statConfig = [
                 ${task.started_at ? `<p><strong>🚀 Started:</strong> ${formatDate(task.started_at)}</p>` : '<p><strong>🚀 Started:</strong> <span style="color: #718096">Not started yet</span></p>'}
                 ${task.completed_at ? `<p><strong>✅ Completed:</strong> ${formatDate(task.completed_at)}</p>` : ''}
                 ${task.due_date ? `<p><strong>⏰ Due Date:</strong> ${task.due_date}</p>` : ''}
-                ${task.blocked_reason ? `<p><strong>🚫 Blocked Reason:</strong> <span style="color: #f56565">${task.blocked_reason}</span></p>` : ''}
+                ${task.blocked_reason ? `<p><strong>🚫 Blocked Reason:</strong> <span style="color: #f56565; white-space: pre-wrap;">${task.blocked_reason.replace(/\\n/g, '\n')}</span></p>` : ''}
             `;
             
             // Add Expected Outcome section
             if (task.expected_outcome) {
+                // Convert literal \n to actual newlines
+                const outcome = task.expected_outcome.replace(/\\n/g, '\n');
                 content += `
                     <hr class="task-section-divider">
                     <div class="task-goal">
                         <div class="task-goal-title">🎯 Expected Outcome</div>
-                        <div class="task-goal-content" style="background: rgba(72, 187, 120, 0.1); border-left: 3px solid #48bb78; padding: 12px; border-radius: 4px; margin-top: 8px; line-height: 1.6;">${task.expected_outcome}</div>
+                        <div class="task-goal-content" style="background: rgba(72, 187, 120, 0.1); border-left: 3px solid #48bb78; padding: 12px; border-radius: 4px; margin-top: 8px; line-height: 1.6; white-space: pre-wrap;">${outcome}</div>
                     </div>
                 `;
             }
@@ -1158,10 +1246,12 @@ $statConfig = [
             
             // Add Description section
             if (task.description) {
+                // Convert literal \n to actual newlines for proper display
+                const desc = task.description.replace(/\\n/g, '\n');
                 content += `
                     <hr class="task-section-divider">
                     <p><strong>📝 Description:</strong></p>
-                    <p style="margin-left: 10px; color: #a0aec0; white-space: pre-wrap;">${task.description}</p>
+                    <p style="margin-left: 10px; color: #a0aec0; white-space: pre-wrap;">${desc}</p>
                 `;
             }
             

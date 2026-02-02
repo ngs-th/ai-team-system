@@ -14,8 +14,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
 
-# Import health monitor
+# Import health monitor and notifications
 from health_monitor import HealthMonitor
+from notifications import NotificationManager, NotificationEvent, send_telegram_notification
 
 # Set timezone to Bangkok (+7)
 os.environ['TZ'] = 'Asia/Bangkok'
@@ -23,28 +24,15 @@ os.environ['TZ'] = 'Asia/Bangkok'
 DB_PATH = Path(__file__).parent / "team.db"
 TELEGRAM_CHANNEL = "1268858185"
 
-def send_telegram_notification(message: str) -> bool:
-    """Send notification to Telegram channel using OpenClaw message tool"""
-    try:
-        result = subprocess.run(
-            ["openclaw", "message", "send", "--channel", "telegram", 
-             "--target", TELEGRAM_CHANNEL, "--message", message],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        return result.returncode == 0
-    except Exception as e:
-        print(f"[Notification Error] Failed to send Telegram message: {e}")
-        return False
-
 class AITeamDB:
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
+        self.notifier = NotificationManager(db_path, TELEGRAM_CHANNEL)
         
     def close(self):
+        self.notifier.close()
         self.conn.close()
         
     def __enter__(self):
@@ -93,10 +81,14 @@ class AITeamDB:
         
         self.conn.commit()
         
-        # Send Telegram notification
-        assignee_str = assignee_id if assignee_id else "Unassigned"
-        notification = f"🆕 Task {task_id}: {title} created (Assignee: {assignee_str})"
-        send_telegram_notification(notification)
+        # Send Telegram notification using NotificationManager
+        self.notifier.notify(
+            event=NotificationEvent.CREATE,
+            task_id=task_id,
+            task_title=title,
+            agent_id=assignee_id,
+            assignee=assignee_id if assignee_id else "Unassigned"
+        )
         
         return task_id
     
@@ -104,9 +96,17 @@ class AITeamDB:
         """Assign task to an agent"""
         cursor = self.conn.cursor()
         
-        # Update task
+        # Get task info before updating
+        cursor.execute('SELECT title, assignee_id FROM tasks WHERE id = ?', (task_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        
+        task_title = row[0]
+        
+        # Update task - reset started_at when reassigning so fresh start time on next start
         cursor.execute('''
-            UPDATE tasks SET assignee_id = ?, status = 'todo', updated_at = CURRENT_TIMESTAMP
+            UPDATE tasks SET assignee_id = ?, status = 'todo', started_at = NULL, updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (agent_id, task_id))
         
@@ -114,7 +114,7 @@ class AITeamDB:
         cursor.execute('''
             UPDATE agents SET total_tasks_assigned = total_tasks_assigned + 1,
                             current_task_id = ?, status = 'active',
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (task_id, agent_id))
         
@@ -125,6 +125,18 @@ class AITeamDB:
         ''', (task_id, agent_id, f"Assigned to {agent_id}"))
         
         self.conn.commit()
+        
+        # Send Telegram notification (AC: Notification on task assigned)
+        self.notifier.notify(
+            event=NotificationEvent.ASSIGN,
+            task_id=task_id,
+            task_title=task_title,
+            agent_id=agent_id,
+            agent_name=agent_id,
+            entity_type='agent',
+            entity_id=agent_id
+        )
+        
         return cursor.rowcount > 0
     
     def start_task(self, task_id: str, agent_id: str = None) -> bool:
@@ -142,8 +154,8 @@ class AITeamDB:
         
         cursor.execute('''
             UPDATE tasks 
-            SET status = 'in_progress', started_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP
+            SET status = 'in_progress', started_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (task_id,))
         
@@ -155,9 +167,14 @@ class AITeamDB:
         
         self.conn.commit()
         
-        # Send Telegram notification
-        notification = f"🚀 Task {task_id} started by {assignee}"
-        send_telegram_notification(notification)
+        # Send Telegram notification using NotificationManager
+        self.notifier.notify(
+            event=NotificationEvent.START,
+            task_id=task_id,
+            task_title=task_title,
+            agent_id=assignee,
+            agent_name=assignee
+        )
         
         return cursor.rowcount > 0
     
@@ -178,7 +195,7 @@ class AITeamDB:
         
         cursor.execute('''
             UPDATE tasks 
-            SET status = 'review', updated_at = CURRENT_TIMESTAMP
+            SET status = 'review', updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (task_id,))
         
@@ -189,23 +206,31 @@ class AITeamDB:
         
         self.conn.commit()
         
-        # Send Telegram notification
-        notification = f"👀 Task {task_id} sent for review"
-        send_telegram_notification(notification)
+        # Send Telegram notification using NotificationManager
+        self.notifier.notify(
+            event=NotificationEvent.REVIEW,
+            task_id=task_id,
+            task_title=row[0]
+        )
         
         return cursor.rowcount > 0
     
     def update_progress(self, task_id: str, progress: int, notes: str = "") -> bool:
-        """Update task progress (0-100)"""
+        """Update task progress (0-100) - sends notification at milestone intervals"""
         cursor = self.conn.cursor()
         
-        cursor.execute('SELECT progress FROM tasks WHERE id = ?', (task_id,))
+        cursor.execute('SELECT progress, title, assignee_id FROM tasks WHERE id = ?', (task_id,))
         row = cursor.fetchone()
-        old_progress = row[0] if row else 0
+        if not row:
+            return False
+        
+        old_progress = row[0] if row[0] else 0
+        task_title = row[1]
+        assignee_id = row[2]
         
         cursor.execute('''
             UPDATE tasks 
-            SET progress = ?, updated_at = CURRENT_TIMESTAMP,
+            SET progress = ?, updated_at = datetime('now', 'localtime'),
                 notes = CASE WHEN ? != '' THEN ? ELSE notes END
             WHERE id = ?
         ''', (progress, notes, notes, task_id))
@@ -216,58 +241,170 @@ class AITeamDB:
         ''', (task_id, old_progress, progress, notes))
         
         self.conn.commit()
+        
+        # Send progress notification at milestone intervals (0, 25, 50, 75, 100)
+        # or if this is a significant jump (>20%)
+        is_milestone = progress in [0, 25, 50, 75, 100]
+        is_significant = abs(progress - old_progress) >= 20
+        
+        if is_milestone or is_significant:
+            from notifications import NotificationEvent
+            self.notifier.notify(
+                event=NotificationEvent.PROGRESS,
+                task_id=task_id,
+                task_title=task_title,
+                agent_id=assignee_id,
+                agent_name=assignee_id,
+                entity_type='agent',
+                entity_id=assignee_id,
+                progress=progress
+            )
+        
         return cursor.rowcount > 0
     
     def complete_task(self, task_id: str) -> bool:
-        """Mark task as completed"""
+        """Mark task as completed - sends to REVIEW for another agent to verify"""
         cursor = self.conn.cursor()
         
         # Get task info before updating
-        cursor.execute('SELECT title, started_at FROM tasks WHERE id = ?', (task_id,))
+        cursor.execute('SELECT title, started_at, assignee_id FROM tasks WHERE id = ?', (task_id,))
         row = cursor.fetchone()
         if not row:
             return False
         
         task_title = row[0]
+        assignee = row[2]
         
         # Calculate actual duration if started_at exists
         if row[1]:
-            # Calculate duration in minutes
             cursor.execute('''
                 UPDATE tasks 
-                SET status = 'done', progress = 100, completed_at = CURRENT_TIMESTAMP,
-                    updated_at = CURRENT_TIMESTAMP,
-                    actual_duration_minutes = ROUND((strftime('%s', 'now') - strftime('%s', started_at)) / 60)
+                SET status = 'review', progress = 95, 
+                    actual_duration_minutes = ROUND((strftime('%s', 'now') - strftime('%s', started_at)) / 60),
+                    updated_at = datetime('now', 'localtime')
                 WHERE id = ?
             ''', (task_id,))
         else:
             cursor.execute('''
                 UPDATE tasks 
-                SET status = 'done', progress = 100, completed_at = CURRENT_TIMESTAMP,
-                    updated_at = CURRENT_TIMESTAMP
+                SET status = 'review', progress = 95,
+                    updated_at = datetime('now', 'localtime')
                 WHERE id = ?
             ''', (task_id,))
         
-        # Update agent stats
+        # Release agent (they're done, waiting for review)
         cursor.execute('''
             UPDATE agents 
-            SET total_tasks_completed = total_tasks_completed + 1,
-                current_task_id = NULL, status = 'idle',
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = (SELECT assignee_id FROM tasks WHERE id = ?)
-        ''', (task_id,))
+            SET current_task_id = NULL, status = 'idle',
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+        ''', (assignee,))
         
+        # Update agent stats
         cursor.execute('''
             INSERT INTO task_history (task_id, action, old_status, new_status)
-            SELECT id, 'completed', status, 'done'
-            FROM tasks WHERE id = ?
+            VALUES (?, 'completed', 'in_progress', 'review')
         ''', (task_id,))
         
         self.conn.commit()
         
-        # Send Telegram notification
-        notification = f"✅ Task {task_id} completed"
-        send_telegram_notification(notification)
+        # Send Telegram notification - task ready for review
+        self.notifier.notify(
+            event=NotificationEvent.REVIEW,
+            task_id=task_id,
+            task_title=task_title,
+            agent_id=assignee,
+            agent_name=assignee
+        )
+        
+        return cursor.rowcount > 0
+    
+    def approve_review(self, task_id: str, reviewer_id: str = None) -> bool:
+        """Approve reviewed task - moves from review to done"""
+        cursor = self.conn.cursor()
+        
+        # Get task info
+        cursor.execute('SELECT title, status, assignee_id, started_at FROM tasks WHERE id = ?', (task_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        
+        if row[1] != 'review':
+            print(f"⚠️ Task {task_id} must be in review status to approve")
+            return False
+        
+        task_title = row[0]
+        original_assignee = row[2]
+        started_at = row[3]
+        
+        # Check if memory was updated (working memory must have recent entry)
+        cursor.execute('''
+            SELECT working_notes, last_updated 
+            FROM agent_working_memory 
+            WHERE agent_id = ? AND current_task_id = ?
+            AND last_updated > datetime('now', '-2 hours')
+        ''', (original_assignee, task_id))
+        memory_row = cursor.fetchone()
+        
+        if not memory_row:
+            print(f"⚠️ Cannot approve {task_id}: Agent {original_assignee} did not update working memory!")
+            print(f"   Requirement: Must update working memory every 30 minutes")
+            return False
+        
+        # Check if learnings were added
+        cursor.execute('''
+            SELECT 1 FROM agent_context 
+            WHERE agent_id = ? 
+            AND learnings LIKE '%' || datetime('now', '%Y-%m') || '%'
+        ''', (original_assignee,))
+        if not cursor.fetchone():
+            print(f"⚠️ Warning: Agent {original_assignee} may not have added learning for this task")
+            # Don't block approval, just warn
+        
+        # Calculate actual duration if not already set and started_at exists
+        duration_calc = ""
+        duration_params = []
+        if started_at:
+            duration_calc = """
+                , actual_duration_minutes = COALESCE(
+                    actual_duration_minutes, 
+                    ROUND((strftime('%s', 'now') - strftime('%s', started_at)) / 60)
+                )
+            """
+        
+        # Move to done
+        cursor.execute(f'''
+            UPDATE tasks 
+            SET status = 'done', progress = 100, completed_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
+                {duration_calc}
+            WHERE id = ?
+        ''', (task_id,))
+        
+        # Update original agent's completed count
+        if original_assignee:
+            cursor.execute('''
+                UPDATE agents 
+                SET total_tasks_completed = total_tasks_completed + 1,
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (original_assignee,))
+        
+        cursor.execute('''
+            INSERT INTO task_history (task_id, action, old_status, new_status, agent_id, notes)
+            VALUES (?, 'approved', 'review', 'done', ?, ?)
+        ''', (task_id, reviewer_id, f"Approved by {reviewer_id or 'unknown'}"))
+        
+        self.conn.commit()
+        
+        # Send completion notification
+        self.notifier.notify(
+            event=NotificationEvent.COMPLETE,
+            task_id=task_id,
+            task_title=task_title,
+            agent_id=original_assignee,
+            agent_name=original_assignee
+        )
         
         return cursor.rowcount > 0
     
@@ -277,13 +414,13 @@ class AITeamDB:
         
         cursor.execute('''
             UPDATE tasks 
-            SET status = 'blocked', blocked_reason = ?, updated_at = CURRENT_TIMESTAMP
+            SET status = 'blocked', blocked_reason = ?, updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (reason, task_id))
         
         cursor.execute('''
             UPDATE agents 
-            SET status = 'blocked', updated_at = CURRENT_TIMESTAMP
+            SET status = 'blocked', updated_at = datetime('now', 'localtime')
             WHERE id = (SELECT assignee_id FROM tasks WHERE id = ?)
         ''', (task_id,))
         
@@ -294,9 +431,25 @@ class AITeamDB:
         
         self.conn.commit()
         
-        # Send Telegram notification
-        notification = f"🚫 Task {task_id} blocked: {reason}"
-        send_telegram_notification(notification)
+        # Send Telegram notification using NotificationManager (AC: Notification on task blocked)
+        # Get task title
+        cursor.execute('SELECT title FROM tasks WHERE id = ?', (task_id,))
+        title_row = cursor.fetchone()
+        task_title = title_row[0] if title_row else None
+        
+        # Get assignee
+        cursor.execute('SELECT assignee_id FROM tasks WHERE id = ?', (task_id,))
+        assignee_row = cursor.fetchone()
+        assignee = assignee_row[0] if assignee_row else None
+        
+        self.notifier.notify(
+            event=NotificationEvent.BLOCK,
+            task_id=task_id,
+            task_title=task_title,
+            agent_id=assignee,
+            agent_name=assignee,
+            reason=reason
+        )
         
         return cursor.rowcount > 0
     
@@ -318,26 +471,32 @@ class AITeamDB:
         
         cursor.execute('''
             UPDATE tasks 
-            SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP
+            SET status = 'in_progress', started_at = datetime('now', 'localtime'), 
+                blocked_reason = NULL, fix_loop_count = 0, updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (task_id,))
         
         cursor.execute('''
             UPDATE agents 
-            SET status = 'active', updated_at = CURRENT_TIMESTAMP
+            SET status = 'active', updated_at = datetime('now', 'localtime')
             WHERE id = (SELECT assignee_id FROM tasks WHERE id = ?)
         ''', (task_id,))
         
         cursor.execute('''
-            INSERT INTO task_history (task_id, action, old_status, new_status)
-            VALUES (?, 'unblocked', 'blocked', 'in_progress')
+            INSERT INTO task_history (task_id, action, old_status, new_status, notes)
+            VALUES (?, 'unblocked', 'blocked', 'in_progress', 'Fix loop counter reset to 0')
         ''', (task_id,))
         
         self.conn.commit()
         
-        # Send Telegram notification
-        notification = f"🔄 Task {task_id} resumed"
-        send_telegram_notification(notification)
+        # Send Telegram notification using NotificationManager
+        self.notifier.notify(
+            event=NotificationEvent.UNBLOCK,
+            task_id=task_id,
+            task_title=row[0],
+            agent_id=assignee,
+            agent_name=assignee
+        )
         
         return cursor.rowcount > 0
     
@@ -355,7 +514,7 @@ class AITeamDB:
         
         cursor.execute('''
             UPDATE tasks 
-            SET status = 'backlog', blocked_reason = ?, updated_at = CURRENT_TIMESTAMP
+            SET status = 'backlog', blocked_reason = ?, started_at = NULL, updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (reason, task_id))
         
@@ -366,9 +525,13 @@ class AITeamDB:
         
         self.conn.commit()
         
-        # Send Telegram notification
-        notification = f"📋 Task {task_id} moved to backlog: {reason}"
-        send_telegram_notification(notification)
+        # Send Telegram notification using NotificationManager
+        self.notifier.notify(
+            event=NotificationEvent.BACKLOG,
+            task_id=task_id,
+            task_title=row[0],
+            reason=reason
+        )
         
         return cursor.rowcount > 0
     
@@ -412,7 +575,7 @@ class AITeamDB:
         cursor = self.conn.cursor()
         cursor.execute('''
             UPDATE agents 
-            SET last_heartbeat = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            SET last_heartbeat = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (agent_id,))
         self.conn.commit()
@@ -562,6 +725,75 @@ class AITeamDB:
         self.conn.commit()
         return cursor.rowcount
 
+    def get_duration_stats(self) -> dict:
+        """Get task duration statistics"""
+        cursor = self.conn.cursor()
+        
+        # Overall stats for completed tasks
+        cursor.execute('''
+            SELECT 
+                COUNT(*) as total_completed,
+                ROUND(AVG(actual_duration_minutes), 1) as avg_duration_minutes,
+                MIN(actual_duration_minutes) as min_duration,
+                MAX(actual_duration_minutes) as max_duration,
+                ROUND(AVG(CASE 
+                    WHEN actual_duration_minutes > 0 THEN actual_duration_minutes 
+                END), 1) as avg_nonzero_duration
+            FROM tasks 
+            WHERE status = 'done' 
+              AND actual_duration_minutes IS NOT NULL
+              AND actual_duration_minutes > 0
+        ''')
+        overall = cursor.fetchone()
+        
+        # Stats by agent
+        cursor.execute('''
+            SELECT 
+                a.name as agent_name,
+                COUNT(*) as tasks_completed,
+                ROUND(AVG(t.actual_duration_minutes), 1) as avg_duration_minutes,
+                ROUND(AVG(t.actual_duration_minutes) / 60, 1) as avg_duration_hours
+            FROM tasks t
+            JOIN agents a ON t.assignee_id = a.id
+            WHERE t.status = 'done' 
+              AND t.actual_duration_minutes IS NOT NULL
+              AND t.actual_duration_minutes > 0
+            GROUP BY t.assignee_id
+            ORDER BY tasks_completed DESC
+        ''')
+        by_agent = [dict(row) for row in cursor.fetchall()]
+        
+        # Recent completed tasks with duration
+        cursor.execute('''
+            SELECT 
+                t.id,
+                t.title,
+                a.name as assignee_name,
+                t.actual_duration_minutes,
+                t.completed_at
+            FROM tasks t
+            LEFT JOIN agents a ON t.assignee_id = a.id
+            WHERE t.status = 'done' 
+              AND t.actual_duration_minutes IS NOT NULL
+            ORDER BY t.completed_at DESC
+            LIMIT 10
+        ''')
+        recent = [dict(row) for row in cursor.fetchall()]
+        
+        return {
+            'overall': {
+                'total_completed': overall[0] or 0,
+                'avg_duration_minutes': overall[1] or 0,
+                'min_duration_minutes': overall[2] or 0,
+                'max_duration_minutes': overall[3] or 0,
+                'avg_formatted': self.format_duration(int(overall[1] or 0)),
+                'min_formatted': self.format_duration(int(overall[2] or 0)),
+                'max_formatted': self.format_duration(int(overall[3] or 0))
+            },
+            'by_agent': by_agent,
+            'recent': recent
+        }
+
     def update_task_requirements(self, task_id: str, 
                                   prerequisites: str = None,
                                   acceptance_criteria: str = None, 
@@ -589,7 +821,7 @@ class AITeamDB:
         params.append(task_id)
         query = f'''
             UPDATE tasks 
-            SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP
+            SET {', '.join(updates)}, updated_at = datetime('now', 'localtime')
             WHERE id = ?
         '''
         
@@ -645,7 +877,7 @@ class AITeamDB:
         try:
             cursor.execute(f'''
                 UPDATE agent_context 
-                SET {field} = ?, last_updated = CURRENT_TIMESTAMP
+                SET {field} = ?, last_updated = datetime('now', 'localtime')
                 WHERE agent_id = ?
             ''', (content, agent_id))
             self.conn.commit()
@@ -692,7 +924,7 @@ class AITeamDB:
         params.append(agent_id)
         query = f'''
             UPDATE agent_working_memory 
-            SET {', '.join(updates)}, last_updated = CURRENT_TIMESTAMP
+            SET {', '.join(updates)}, last_updated = datetime('now', 'localtime')
             WHERE agent_id = ?
         '''
         
@@ -852,6 +1084,10 @@ def main():
     unblock.add_argument('task_id', help='Task ID')
     unblock.add_argument('--agent', help='Agent ID resuming the task')
     
+    approve = task_sub.add_parser('approve', help='Approve reviewed task (review -> done)')
+    approve.add_argument('task_id', help='Task ID')
+    approve.add_argument('--reviewer', help='Reviewer agent ID')
+    
     requirements = task_sub.add_parser('requirements', help='Update task requirements (prerequisites, acceptance criteria, goal)')
     requirements.add_argument('task_id', help='Task ID')
     requirements.add_argument('--prerequisites', help='Prerequisites as markdown checklist')
@@ -860,6 +1096,10 @@ def main():
     
     show_reqs = task_sub.add_parser('show-requirements', help='Show task requirements')
     show_reqs.add_argument('task_id', help='Task ID')
+    
+    duration_cmd = task_sub.add_parser('duration', help='Show task duration and timing info')
+    duration_cmd.add_argument('task_id', help='Task ID')
+    duration_cmd.add_argument('--recalc', action='store_true', help='Recalculate duration for completed tasks')
     
     list_tasks = task_sub.add_parser('list', help='List tasks')
     list_tasks.add_argument('--status', choices=['backlog', 'todo', 'in_progress', 'review', 'done', 'blocked', 'cancelled'],
@@ -935,6 +1175,7 @@ def main():
     # Report commands
     report_parser = subparsers.add_parser('report', help='Generate reports')
     report_parser.add_argument('--daily', action='store_true', help='Daily report')
+    report_parser.add_argument('--duration', action='store_true', help='Show task duration statistics')
     
     # Health commands
     health_parser = subparsers.add_parser('health', help='Health monitoring')
@@ -942,6 +1183,22 @@ def main():
     
     health_check = health_sub.add_parser('check', help='Run health check once')
     health_status = health_sub.add_parser('status', help='Show current health status')
+    
+    # Notification commands
+    notify_parser = subparsers.add_parser('notify', help='Notification settings')
+    notify_sub = notify_parser.add_subparsers(dest='notify_action')
+    
+    notify_level = notify_sub.add_parser('level', help='Set notification level for agent')
+    notify_level.add_argument('agent_id', help='Agent ID')
+    notify_level.add_argument('level', choices=['minimal', 'normal', 'verbose'],
+                              help='Notification level (minimal=block+complete, normal=assign+start+block+complete, verbose=all)')
+    
+    notify_show = notify_sub.add_parser('show', help='Show notification settings')
+    notify_show.add_argument('--agent', help='Show settings for specific agent')
+    
+    notify_log = notify_sub.add_parser('log', help='Show notification log')
+    notify_log.add_argument('--task', help='Filter by task ID')
+    notify_log.add_argument('--limit', type=int, default=20, help='Number of entries to show')
     
     args = parser.parse_args()
     
@@ -1037,7 +1294,11 @@ def main():
                     
             elif args.task_action == 'done':
                 if db.complete_task(args.task_id):
-                    print(f"✅ Task {args.task_id} completed")
+                    print(f"✅ Task {args.task_id} completed - sent to review")
+                    
+            elif args.task_action == 'approve':
+                if db.approve_review(args.task_id, args.reviewer):
+                    print(f"✅ Task {args.task_id} approved and marked as done")
                     
             elif args.task_action == 'block':
                 if db.block_task(args.task_id, args.reason):
@@ -1080,6 +1341,67 @@ def main():
                         print("   No requirements defined yet.")
                 else:
                     print(f"⚠️ Task {args.task_id} not found")
+            
+            elif args.task_action == 'duration':
+                # Get full task details
+                cursor = db.conn.cursor()
+                cursor.execute('''
+                    SELECT id, title, status, started_at, completed_at, 
+                           actual_duration_minutes, created_at, assignee_id
+                    FROM tasks WHERE id = ?
+                ''', (args.task_id,))
+                row = cursor.fetchone()
+                
+                if not row:
+                    print(f"⚠️ Task {args.task_id} not found")
+                else:
+                    task_id, title, status, started_at, completed_at, duration_mins, created_at, assignee_id = row
+                    
+                    # Recalculate if requested
+                    if args.recalc and status == 'done' and started_at and completed_at:
+                        recalc_count = db.recalculate_durations()
+                        print(f"🔄 Recalculated {recalc_count} task durations")
+                        # Re-fetch
+                        cursor.execute('''
+                            SELECT actual_duration_minutes FROM tasks WHERE id = ?
+                        ''', (args.task_id,))
+                        duration_mins = cursor.fetchone()[0]
+                    
+                    print(f"\n⏱️  Task Duration: {task_id}")
+                    print(f"   Title: {title}")
+                    print(f"   Status: {status}")
+                    print()
+                    
+                    if created_at:
+                        print(f"   📅 Created:     {created_at}")
+                    if started_at:
+                        print(f"   🚀 Started:     {started_at}")
+                    else:
+                        print(f"   🚀 Started:     (not started yet)")
+                    if completed_at:
+                        print(f"   ✅ Completed:   {completed_at}")
+                    
+                    print()
+                    if duration_mins:
+                        formatted = db.format_duration(duration_mins)
+                        print(f"   ⏱️  Duration: {formatted} ({duration_mins} minutes)")
+                    elif status == 'done':
+                        print(f"   ⏱️  Duration: Not recorded")
+                    elif started_at:
+                        # Calculate elapsed time for in-progress tasks
+                        cursor.execute('''
+                            SELECT ROUND((strftime('%s', 'now') - strftime('%s', started_at)) / 60)
+                            FROM tasks WHERE id = ?
+                        ''', (args.task_id,))
+                        elapsed = cursor.fetchone()[0]
+                        print(f"   ⏱️  Elapsed: {db.format_duration(elapsed)} (in progress)")
+                    else:
+                        print(f"   ⏱️  Duration: N/A (task not started)")
+                    
+                    # Show agent
+                    if assignee_id:
+                        print(f"   👤 Agent: {assignee_id}")
+                    print()
                     
             elif args.task_action == 'list':
                 tasks = db.get_tasks(status=args.status, assignee=args.agent)
@@ -1091,7 +1413,7 @@ def main():
                     }.get(t['status'], '⬜')
                     print(f"{status_emoji} {t['id']} | {t['title'][:40]}...")
                     print(f"   Status: {t['status']} | Assignee: {t['assignee_name'] or 'Unassigned'}")
-                    if t['progress'] > 0:
+                    if t.get('progress') and t['progress'] > 0:
                         print(f"   Progress: {t['progress']}%")
                     print()
                     
@@ -1222,6 +1544,38 @@ def main():
             if args.daily:
                 report = db.generate_daily_report()
                 print(report)
+            elif args.duration:
+                stats = db.get_duration_stats()
+                print("\n⏱️  Task Duration Statistics\n")
+                
+                overall = stats['overall']
+                print("📊 Overall Statistics:")
+                print(f"   Total Completed Tasks: {overall['total_completed']}")
+                if overall['total_completed'] > 0:
+                    print(f"   Average Duration: {overall['avg_formatted']}")
+                    print(f"   Fastest Task: {overall['min_formatted']}")
+                    print(f"   Slowest Task: {overall['max_formatted']}")
+                print()
+                
+                if stats['by_agent']:
+                    print("👤 By Agent:")
+                    for agent in stats['by_agent']:
+                        agent_avg = db.format_duration(int(agent['avg_duration_minutes'] or 0))
+                        print(f"   {agent['agent_name']}: {agent['tasks_completed']} tasks, avg {agent_avg}")
+                    print()
+                
+                if stats['recent']:
+                    print("🕐 Recently Completed:")
+                    for task in stats['recent'][:5]:
+                        duration = db.format_duration(task['actual_duration_minutes'] or 0)
+                        print(f"   {task['id']}: {duration} - {task['title'][:40]}...")
+                    print()
+            else:
+                # Default: show usage
+                print("📊 Reports")
+                print("\nCommands:")
+                print("  report --daily     - Generate daily report")
+                print("  report --duration  - Show task duration statistics")
                 
         elif args.command == 'health':
             # Health commands use their own context manager
@@ -1238,6 +1592,61 @@ def main():
                     # Default: show status
                     monitor.print_health_status()
             return  # Already closed db
+            
+        elif args.command == 'notify':
+            from notifications import NotificationManager
+            
+            if args.notify_action == 'level':
+                level_details = {
+                    'minimal': 'Only block and complete events',
+                    'normal': 'Assign, start, block, and complete events',
+                    'verbose': 'All events including review and backlog'
+                }
+                if db.notifier.set_agent_level(args.agent_id, args.level):
+                    print(f"✅ Set notification level for {args.agent_id} to '{args.level}'")
+                    print(f"   Level details: {level_details.get(args.level, '')}")
+                else:
+                    print(f"⚠️ Agent {args.agent_id} not found")
+                    
+            elif args.notify_action == 'show':
+                if args.agent:
+                    level = db.notifier.get_agent_level(args.agent)
+                    settings = db.notifier.get_settings('agent', args.agent)
+                    event_details = {
+                        'minimal': 'block, complete',
+                        'normal': 'assign, start, block, complete, unblock',
+                        'verbose': 'all events (assign, start, block, complete, unblock, review, backlog, create)'
+                    }
+                    print(f"\n📬 Notification Settings for {args.agent}:")
+                    print(f"   Level: {level}")
+                    print(f"   Events: {event_details.get(level, 'unknown')}")
+                else:
+                    # Show all agents' notification levels
+                    cursor = db.conn.cursor()
+                    cursor.execute('SELECT id, name, notification_level FROM agents ORDER BY id')
+                    print("\n📬 Notification Levels:")
+                    for row in cursor.fetchall():
+                        print(f"   {row[0]}: {row[2]}")
+                        
+            elif args.notify_action == 'log':
+                logs = db.notifier.get_notification_log(args.task, args.limit)
+                print(f"\n📋 Notification Log ({len(logs)} entries):")
+                for log in logs[:args.limit]:
+                    status = "✅" if log['success'] else "❌"
+                    print(f"   {status} [{log['sent_at']}] {log['event_type'].upper()}: {log['message'][:60]}...")
+                    
+            else:
+                # Default: show notification help
+                print("📬 Notification Management")
+                print("\nCommands:")
+                print("  notify level <agent_id> <minimal|normal|verbose>  - Set notification level")
+                print("  notify show [--agent <agent_id>]                   - Show notification settings")
+                print("  notify log [--task <task_id>] [--limit <n>]        - Show notification log")
+                print("\nLevels:")
+                print("  minimal - Only block and complete events")
+                print("  normal  - Assign, start, block, complete, unblock events")
+                print("  verbose - All events including review, backlog, create")
+                    
         else:
             parser.print_help()
 

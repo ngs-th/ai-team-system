@@ -273,10 +273,31 @@ python3 team_db.py agent list
         if stuck > 0:
             print(f"\n⚠️  Stuck Tasks: {stuck}")
         
+        # Get tasks with high fix loop counts (approaching limit)
+        cursor.execute('''
+            SELECT t.id, t.title, t.fix_loop_count, a.name as assignee_name
+            FROM tasks t
+            LEFT JOIN agents a ON t.assignee_id = a.id
+            WHERE t.fix_loop_count > 0
+            ORDER BY t.fix_loop_count DESC
+            LIMIT 5
+        ''')
+        fix_loop_tasks = [dict(row) for row in cursor.fetchall()]
+        
+        if fix_loop_tasks:
+            print(f"\n🔄 Fix Loop Status:")
+            for t in fix_loop_tasks:
+                warning = ""
+                if t['fix_loop_count'] >= 10:
+                    warning = " 🛑 AUTO-STOPPED"
+                elif t['fix_loop_count'] >= 7:
+                    warning = " ⚠️ NEAR LIMIT"
+                print(f"   {t['id']}: {t['fix_loop_count']}/10{warning} - {t['assignee_name'] or 'Unassigned'}")
+        
         print("\n" + "=" * 70)
 
     def handle_failure(self, task_id: str, failure_reason: str):
-        """Handle failed task - reassign or escalate"""
+        """Handle failed task - reassign or escalate with auto-stop at 10 fix loops"""
         print(f"\n🚨 HANDLING FAILURE: {task_id}")
         print(f"   Reason: {failure_reason}")
         
@@ -291,29 +312,164 @@ python3 team_db.py agent list
         ''', (task_id,))
         task = dict(cursor.fetchone())
         
+        if not task:
+            print(f"   ❌ Task {task_id} not found")
+            return
+        
         # Check retry count
         fix_loops = task.get('fix_loop_count', 0)
         
-        if fix_loops >= 10:
-            # Block task
-            print(f"   Fix loops exceeded (10). Blocking task.")
-            cursor.execute('''
-                UPDATE tasks SET status = 'blocked', blocked_reason = ?
-                WHERE id = ?
-            ''', (f"Auto-blocked: {failure_reason}", task_id))
-            
-            # Notify
-            self._notify(f"🚫 Task {task_id} auto-blocked after 10 retries")
-        else:
-            # Increment and reassign
+        if fix_loops >= 9:  # This will be the 10th loop (9+1)
+            # Auto-stop: Block task after 10 fix loops
             new_count = fix_loops + 1
-            print(f"   Retry {new_count}/10")
+            blocked_reason = f"""🛑 AUTO-STOPPED after {new_count} fix loops
+
+Original failure: {failure_reason}
+
+This task has exceeded the maximum allowed fix loops (10) to prevent infinite loops and excessive token consumption.
+
+TO RESUME:
+1. Investigate the root cause manually
+2. Use: python3 orchestrator.py resume-task {task_id} --agent <agent_id>
+   or: python3 team_db.py task unblock {task_id}
+3. This will reset the fix loop counter and allow the agent to continue
+"""
+            print(f"   🛑 Fix loops exceeded ({new_count}/10). Auto-stopping task.")
             
             cursor.execute('''
-                UPDATE tasks SET fix_loop_count = ? WHERE id = ?
+                UPDATE tasks 
+                SET status = 'blocked', 
+                    blocked_reason = ?,
+                    fix_loop_count = ?,
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (blocked_reason, new_count, task_id))
+            
+            # Update agent status
+            cursor.execute('''
+                UPDATE agents 
+                SET status = 'blocked', current_task_id = NULL,
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = (SELECT assignee_id FROM tasks WHERE id = ?)
+            ''', (task_id,))
+            
+            # Log to task history
+            cursor.execute('''
+                INSERT INTO task_history (task_id, action, old_status, new_status, notes)
+                VALUES (?, 'auto-stopped', 'in_progress', 'blocked', ?)
+            ''', (task_id, f"Auto-stopped after {new_count} fix loops: {failure_reason}"))
+            
+            self.conn.commit()
+            
+            # Notify with clear status
+            self._notify(
+                f"🚫 TASK AUTO-STOPPED: {task_id}\n"
+                f"Task exceeded 10 fix loops and was automatically stopped.\n"
+                f"Assignee: {task.get('assignee_name', 'Unknown')}\n"
+                f"To resume: python3 orchestrator.py resume-task {task_id} --agent <agent_id>"
+            )
+            
+        else:
+            # Increment and continue
+            new_count = fix_loops + 1
+            print(f"   🔄 Retry {new_count}/10")
+            
+            cursor.execute('''
+                UPDATE tasks 
+                SET fix_loop_count = ?, updated_at = datetime('now', 'localtime')
+                WHERE id = ?
             ''', (new_count, task_id))
+            
+            # Log the retry
+            cursor.execute('''
+                INSERT INTO task_history (task_id, action, notes)
+                VALUES (?, 'fix-loop', ?)
+            ''', (task_id, f"Fix loop {new_count}/10: {failure_reason}"))
+            
+            self.conn.commit()
+    
+    def resume_task(self, task_id: str, agent_id: str = None, reason: str = "") -> bool:
+        """
+        Resume an auto-stopped task after manual intervention.
+        Resets fix_loop_count and changes status back to in_progress.
+        """
+        cursor = self.conn.cursor()
+        
+        # Get task details
+        cursor.execute('''
+            SELECT t.*, a.name as assignee_name 
+            FROM tasks t 
+            LEFT JOIN agents a ON t.assignee_id = a.id
+            WHERE t.id = ?
+        ''', (task_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            print(f"❌ Task {task_id} not found")
+            return False
+        
+        task = dict(row)
+        
+        if task['status'] != 'blocked':
+            print(f"⚠️  Task {task_id} is not blocked (status: {task['status']})")
+            return False
+        
+        # Check if it was auto-stopped (has high fix_loop_count)
+        if task.get('fix_loop_count', 0) < 10:
+            print(f"⚠️  Task {task_id} was not auto-stopped (fix loops: {task.get('fix_loop_count', 0)})")
+            print(f"   Use: python3 team_db.py task unblock {task_id}")
+            return False
+        
+        # Determine agent to assign
+        resume_agent = agent_id or task.get('assignee_id')
+        if not resume_agent:
+            print(f"❌ No agent specified and task has no current assignee")
+            print(f"   Use: python3 orchestrator.py resume-task {task_id} --agent <agent_id>")
+            return False
+        
+        # Reset fix loops and unblock
+        cursor.execute('''
+            UPDATE tasks 
+            SET status = 'in_progress',
+                fix_loop_count = 0,
+                blocked_reason = NULL,
+                started_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime'),
+                assignee_id = ?
+            WHERE id = ?
+        ''', (resume_agent, task_id))
+        
+        # Update agent status
+        cursor.execute('''
+            UPDATE agents 
+            SET status = 'active', current_task_id = ?,
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+        ''', (task_id, resume_agent))
+        
+        # Log the resume
+        resume_note = f"Resumed after auto-stop. {reason}".strip()
+        cursor.execute('''
+            INSERT INTO task_history (task_id, action, old_status, new_status, agent_id, notes)
+            VALUES (?, 'resumed', 'blocked', 'in_progress', ?, ?)
+        ''', (task_id, resume_agent, resume_note))
         
         self.conn.commit()
+        
+        print(f"✅ Task {task_id} resumed")
+        print(f"   Agent: {resume_agent}")
+        print(f"   Fix loops reset to: 0")
+        print(f"   Status: in_progress")
+        
+        # Notify
+        self._notify(
+            f"✅ TASK RESUMED: {task_id}\n"
+            f"Task has been manually resumed after auto-stop.\n"
+            f"Assigned to: {resume_agent}\n"
+            f"Fix loop counter reset to 0."
+        )
+        
+        return True
 
     def _notify(self, message: str):
         """Send notification to Telegram"""
@@ -325,6 +481,76 @@ python3 team_db.py agent list
             )
         except Exception as e:
             print(f"[Notification Error] {e}")
+
+    def check_fix_loop_status(self, task_id: str = None):
+        """Check fix loop status for a task or all tasks approaching limit"""
+        cursor = self.conn.cursor()
+        
+        if task_id:
+            # Check specific task
+            cursor.execute('''
+                SELECT t.id, t.title, t.status, t.fix_loop_count, t.blocked_reason,
+                       a.name as assignee_name
+                FROM tasks t
+                LEFT JOIN agents a ON t.assignee_id = a.id
+                WHERE t.id = ?
+            ''', (task_id,))
+            row = cursor.fetchone()
+            
+            if not row:
+                print(f"❌ Task {task_id} not found")
+                return
+            
+            task = dict(row)
+            print(f"\n🔍 Fix Loop Status: {task_id}")
+            print(f"   Title: {task['title']}")
+            print(f"   Status: {task['status']}")
+            print(f"   Assignee: {task['assignee_name'] or 'Unassigned'}")
+            print(f"   Fix Loops: {task['fix_loop_count']}/10")
+            
+            remaining = 10 - task['fix_loop_count']
+            if task['fix_loop_count'] >= 10:
+                print(f"   ⚠️  Task AUTO-STOPPED - Manual intervention required")
+                print(f"   To resume: python3 orchestrator.py resume-task {task_id} --agent <agent_id>")
+            elif remaining <= 3:
+                print(f"   ⚠️  WARNING: Only {remaining} fix loops remaining!")
+            else:
+                print(f"   ✅ {remaining} fix loops remaining")
+                
+            if task['blocked_reason']:
+                print(f"\n   Blocked Reason:")
+                for line in task['blocked_reason'].split('\n')[:5]:
+                    print(f"   {line}")
+        else:
+            # List all tasks with fix loops > 0
+            cursor.execute('''
+                SELECT t.id, t.title, t.status, t.fix_loop_count, a.name as assignee_name
+                FROM tasks t
+                LEFT JOIN agents a ON t.assignee_id = a.id
+                WHERE t.fix_loop_count > 0
+                ORDER BY t.fix_loop_count DESC
+            ''')
+            tasks = [dict(row) for row in cursor.fetchall()]
+            
+            print(f"\n🔄 Tasks with Fix Loops ({len(tasks)} total):")
+            print("-" * 70)
+            
+            for t in tasks:
+                status_emoji = {
+                    'blocked': '🚫', 'in_progress': '🔄', 'todo': '⬜',
+                    'review': '👀', 'done': '✅'
+                }.get(t['status'], '⬜')
+                
+                warning = ""
+                if t['fix_loop_count'] >= 10:
+                    warning = " 🛑 AUTO-STOPPED"
+                elif t['fix_loop_count'] >= 7:
+                    warning = " ⚠️ "
+                
+                print(f"{status_emoji} {t['id']} | Loops: {t['fix_loop_count']}/10{warning}")
+                print(f"   {t['title'][:50]}...")
+                print(f"   Status: {t['status']} | Assignee: {t['assignee_name'] or 'Unassigned'}")
+                print()
 
     def _get_next_mission_number(self) -> int:
         """Get next mission sequence number"""
@@ -361,6 +587,21 @@ def main():
     # Monitor
     monitor = subparsers.add_parser('monitor', help='Monitor execution')
     
+    # Resume auto-stopped task
+    resume = subparsers.add_parser('resume-task', help='Resume an auto-stopped task after manual intervention')
+    resume.add_argument('task_id', help='Task ID to resume')
+    resume.add_argument('--agent', help='Agent ID to assign (optional, defaults to previous assignee)')
+    resume.add_argument('--reason', default='', help='Reason for resuming')
+    
+    # Handle failure (for testing or manual trigger)
+    fail = subparsers.add_parser('handle-failure', help='Handle task failure (increment fix loop)')
+    fail.add_argument('task_id', help='Task ID')
+    fail.add_argument('reason', help='Failure reason')
+    
+    # Fix loop status check
+    fix_status = subparsers.add_parser('fix-status', help='Check fix loop status')
+    fix_status.add_argument('--task', help='Specific task ID (optional, shows all if omitted)')
+    
     args = parser.parse_args()
     
     with AITeamOrchestrator() as orch:
@@ -379,6 +620,15 @@ def main():
             
         elif args.command == 'monitor':
             orch.monitor_execution()
+            
+        elif args.command == 'resume-task':
+            orch.resume_task(args.task_id, args.agent, args.reason)
+            
+        elif args.command == 'handle-failure':
+            orch.handle_failure(args.task_id, args.reason)
+            
+        elif args.command == 'fix-status':
+            orch.check_fix_loop_status(args.task)
             
         else:
             parser.print_help()

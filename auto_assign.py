@@ -221,7 +221,7 @@ class AutoAssign:
 **Remember:** You are {agent['name']}. Use your expertise and context to complete this task effectively.
 """
 
-            # Update agent status to active (spawn will be handled by cron or manual)
+            # Update agent status to active
             cursor = self.conn.cursor()
             cursor.execute('''
                 UPDATE agents 
@@ -230,7 +230,34 @@ class AutoAssign:
             ''', (agent['id'],))
             self.conn.commit()
             
-            print(f"  🚀 Assigned to {agent['name']} - ready to start")
+            # Spawn subagent via openclaw API
+            import subprocess
+            import json
+            
+            # Build payload for sessions_spawn
+            payload = {
+                'task': task_message,
+                'agent_id': agent['id'],
+                'label': f"{agent['id']}-{task['id']}",
+                'run_timeout_seconds': 3600,
+                'cleanup': 'keep'
+            }
+            
+            # Use openclaw gateway API
+            spawn_result = subprocess.run(
+                ['curl', '-s', '-X', 'POST',
+                 'http://localhost:3000/api/sessions/spawn',
+                 '-H', 'Content-Type: application/json',
+                 '-d', json.dumps(payload)],
+                capture_output=True,
+                text=True
+            )
+            
+            if spawn_result.returncode == 0 and 'sessionKey' in spawn_result.stdout:
+                print(f"  🚀 Spawned {agent['name']} for {task['id']}")
+            else:
+                print(f"  ⚠️  Assigned to {agent['name']} - spawn via API failed, manual start needed")
+            
             return True
             
         except Exception as e:
