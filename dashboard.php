@@ -1068,11 +1068,22 @@ $statConfig = [
         // Render markdown checklist to HTML
         function renderChecklist(text) {
             if (!text) return '';
-            // Convert markdown checkboxes to HTML
+            // Convert markdown checkboxes to HTML with proper line breaks
             let html = text
-                .replace(/- \[ \] (.*)/g, '<li><input type="checkbox" disabled> $1</li>')
-                .replace(/- \[x\] (.*)/gi, '<li><input type="checkbox" checked disabled> $1</li>')
-                .replace(/- (.*)/g, '<li>$1</li>');
+                .split('\n')
+                .map(line => {
+                    line = line.trim();
+                    if (line.match(/- \[ \] (.*)/)) {
+                        return '<li style="margin: 8px 0; line-height: 1.5;"><input type="checkbox" disabled style="margin-right: 8px;"> ' + line.replace(/- \[ \] (.*)/, '$1') + '</li>';
+                    } else if (line.match(/- \[x\] (.*)/i)) {
+                        return '<li style="margin: 8px 0; line-height: 1.5;"><input type="checkbox" checked disabled style="margin-right: 8px;"> ' + line.replace(/- \[x\] (.*)/i, '$1') + '</li>';
+                    } else if (line.match(/- (.*)/)) {
+                        return '<li style="margin: 8px 0; line-height: 1.5;">• ' + line.replace(/- (.*)/, '$1') + '</li>';
+                    }
+                    return '';
+                })
+                .filter(line => line)
+                .join('');
             return `<ul style="list-style: none; padding-left: 0; margin: 0;">${html}</ul>`;
         }
         
@@ -1114,13 +1125,13 @@ $statConfig = [
                 ${task.blocked_reason ? `<p><strong>🚫 Blocked Reason:</strong> <span style="color: #f56565">${task.blocked_reason}</span></p>` : ''}
             `;
             
-            // Add Goal section
-            if (task.goal) {
+            // Add Expected Outcome section
+            if (task.expected_outcome) {
                 content += `
                     <hr class="task-section-divider">
                     <div class="task-goal">
-                        <div class="task-goal-title">🎯 Goal</div>
-                        <div class="task-goal-content">${task.goal}</div>
+                        <div class="task-goal-title">🎯 Expected Outcome</div>
+                        <div class="task-goal-content" style="background: rgba(72, 187, 120, 0.1); border-left: 3px solid #48bb78; padding: 12px; border-radius: 4px; margin-top: 8px; line-height: 1.6;">${task.expected_outcome}</div>
                     </div>
                 `;
             }
