@@ -843,6 +843,8 @@ QA Quinn: Done - ผ่านการทดสอบทั้งหมด
 
 ## 10. Tools Reference
 
+### OpenClaw Core Tools
+
 | Tool | Primary Users | Purpose |
 |------|---------------|---------|
 | `sessions_spawn` | Orchestrator | Spawn agents |
@@ -855,6 +857,34 @@ QA Quinn: Done - ผ่านการทดสอบทั้งหมด
 | `web_search` | Planning | Research |
 | `cron` | Orchestrator | Scheduled tasks |
 | `message` | Orchestrator | Notifications |
+
+### AI Team CLI Tools
+
+| Command | Purpose | Example |
+|---------|---------|---------|
+| `team_db.py agents list` | List all agents | `./team_db.py agents list` |
+| `team_db.py tasks list` | List tasks | `./team_db.py tasks list --status todo` |
+| `team_db.py task create` | Create task | `./team_db.py task create "Title" --project PROJ-001` |
+| `team_db.py task create --template` | Create from template | `./team_db.py task create "Title" --template prd` |
+| `team_db.py task template list` | List templates | `./team_db.py task template list` |
+| `agents/spawn-agent.sh` | Spawn agent | `./spawn-agent.sh pm "Task"` |
+
+### Task Templates
+
+| Template | Purpose | Usage |
+|----------|---------|-------|
+| `prd` | Product Requirements Doc | `--template prd` |
+| `tech-spec` | Technical Specification | `--template tech-spec` |
+| `qa-testplan` | QA Test Plan | `--template qa-testplan` |
+| `feature-dev` | Feature Development | `--template feature-dev` |
+| `bug-fix` | Bug Fix | `--template bug-fix` |
+
+### Spawn Modes
+
+| Mode | Command | When to Use |
+|------|---------|-------------|
+| **A - DB Queue** | `./spawn-agent.sh pm "Task"` | Normal tasks (default) |
+| **B - Immediate** | `./spawn-agent.sh pm "Task" --spawn` | Urgent tasks |
 
 ---
 
@@ -923,6 +953,7 @@ Dashboard แสดงผลแบบ **Kanban Board** แทนตาราง:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| **3.4.5** | 2026-02-02 | **Cleanup & Improvements:** Restructured docs (moved analysis → docs/architecture/, created QUICK-REFERENCE.md, SPAWN-MECHANISM.md), fixed spawn-agent.sh paths, added template support to team_db.py (task create --template, task template list/create) |
 | **3.4.4** | 2026-02-02 | Added Task Created notification: Telegram alert when new task is created with assignee |
 | **3.4.3** | 2026-02-02 | Mandatory Telegram notifications for EVERY task status change (todo→in_progress, in_progress→review, review→done, etc.) |
 | **3.4.2** | 2026-02-02 | Clarified Blocked Status: Block the TASK (not the AGENT) so agent can be reassigned to other work immediately |
@@ -944,15 +975,24 @@ Dashboard แสดงผลแบบ **Kanban Board** แทนตาราง:
 |------|---------|
 | `~/clawd/projects/ai-team/dashboard.php` | Web dashboard (PHP) |
 | `~/clawd/projects/ai-team/team_db.py` | CLI management tool |
-| `~/clawd/projects/ai-team/README.md` | Project documentation |
+| `~/clawd/projects/ai-team/agents/spawn-agent.sh` | Agent spawner script |
+| `~/clawd/projects/ai-team/README.md` | Project overview |
 
-### Data (Memory)
+### Documentation
 | File | Purpose |
 |------|---------|
-| `~/clawd/memory/team/team.db` | Central database |
-| `~/clawd/memory/team/messages.db` | Alert/message history |
-| `~/clawd/memory/team/TASK-BOARD.md` | Kanban board view |
-| `~/clawd/memory/team/PROJECT-STATUS.md` | Project status view |
+| `docs/AI-TEAM-SYSTEM.md` | **This file** - Full system documentation |
+| `docs/QUICK-REFERENCE.md` | One-page quick reference (agents, workflows, commands) |
+| `docs/SPAWN-MECHANISM.md` | Spawn modes explained (Mode A: DB Queue, Mode B: Immediate) |
+| `docs/AI-TEAM-SHARED-SYSTEM.md` | Shared context for multi-agent sessions |
+| `docs/architecture/` | System analysis & comparisons |
+
+### Data
+| File | Purpose |
+|------|---------|
+| `~/clawd/projects/ai-team/team.db` | Central SQLite database |
+| `~/clawd/projects/ai-team/agents/*.md` | Agent configuration files |
+| `~/clawd/projects/ai-team/agents/templates/*.md` | Task templates (PRD, Tech Spec, etc.) |
 
 ---
 
@@ -1361,6 +1401,6 @@ python3 team_db.py agent reset <agent_id>
 
 ---
 
-**Last Updated:** 2026-02-02  
+**Last Updated:** 2026-02-02 (v3.4.5)  
 **Maintainer:** Orchestrator Agent  
 **Next Review:** 2026-03-02

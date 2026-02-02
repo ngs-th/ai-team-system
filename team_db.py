@@ -647,6 +647,25 @@ class AITeamDB:
             return False
 
 
+def load_template(template_name: str) -> str:
+    """Load a template file from agents/templates/"""
+    template_path = Path(__file__).parent / "agents" / "templates" / f"template-{template_name}.md"
+    if template_path.exists():
+        return template_path.read_text()
+    return None
+
+def list_templates() -> List[str]:
+    """List available templates"""
+    templates_dir = Path(__file__).parent / "agents" / "templates"
+    if not templates_dir.exists():
+        return []
+    templates = []
+    for f in templates_dir.glob("template-*.md"):
+        # Extract template name from filename (template-{name}.md)
+        name = f.stem.replace("template-", "")
+        templates.append(name)
+    return sorted(templates)
+
 def main():
     parser = argparse.ArgumentParser(description='AI Team Database Manager')
     subparsers = parser.add_subparsers(dest='command', help='Commands')
@@ -659,13 +678,28 @@ def main():
     create.add_argument('title', help='Task title')
     create.add_argument('--desc', default='', help='Task description')
     create.add_argument('--assign', help='Assign to agent')
-    create.add_argument('--project', help='Project ID')
+    create.add_argument('--project', required=True, help='Project ID (required)')
     create.add_argument('--priority', choices=['critical', 'high', 'normal', 'low'], 
                        default='normal', help='Task priority')
     create.add_argument('--due', help='Due date (YYYY-MM-DD)')
     create.add_argument('--prerequisites', help='Prerequisites as markdown checklist (e.g., "- [ ] API token\n- [ ] Design ready")')
     create.add_argument('--acceptance', help='Acceptance criteria as markdown checklist')
     create.add_argument('--expected-outcome', help='Clear description of expected outcome')
+    create.add_argument('--template', help='Use template (prd, tech-spec, qa-testplan, feature-dev, bug-fix)')
+    
+    # Template commands
+    template_parser = task_sub.add_parser('template', help='List or use task templates')
+    template_sub = template_parser.add_subparsers(dest='template_action')
+    
+    template_list = template_sub.add_parser('list', help='List available templates')
+    
+    template_create = template_sub.add_parser('create', help='Create task from template')
+    template_create.add_argument('template_name', help='Template name (prd, tech-spec, qa-testplan, feature-dev, bug-fix)')
+    template_create.add_argument('title', help='Task title')
+    template_create.add_argument('--project', required=True, help='Project ID')
+    template_create.add_argument('--assign', help='Assign to agent')
+    template_create.add_argument('--priority', choices=['critical', 'high', 'normal', 'low'], 
+                                default='normal', help='Task priority')
     
     assign = task_sub.add_parser('assign', help='Assign task')
     assign.add_argument('task_id', help='Task ID')
@@ -760,24 +794,76 @@ def main():
     with AITeamDB() as db:
         if args.command == 'task':
             if args.task_action == 'create':
+                # Load template if specified
+                description = args.desc
+                prerequisites = args.prerequisites
+                acceptance = args.acceptance
+                goal = args.expected_outcome
+                
+                if args.template:
+                    template_content = load_template(args.template)
+                    if template_content:
+                        description = f"## Template: {args.template}\n\n{template_content}\n\n---\n\n## Task: {args.title}\n\n{args.desc}"
+                        print(f"📄 Using template: {args.template}")
+                    else:
+                        available = list_templates()
+                        print(f"⚠️  Template '{args.template}' not found")
+                        print(f"   Available: {', '.join(available)}")
+                
                 task_id = db.create_task(
                     title=args.title,
-                    description=args.desc,
+                    description=description,
                     assignee_id=args.assign,
                     project_id=args.project,
                     priority=args.priority,
                     due_date=args.due,
-                    prerequisites=args.prerequisites,
-                    acceptance_criteria=args.acceptance,
-                    goal=args.goal
+                    prerequisites=prerequisites,
+                    acceptance_criteria=acceptance,
+                    expected_outcome=goal
                 )
                 print(f"✅ Task created: {task_id}")
-                if args.prerequisites:
-                    print(f"   Prerequisites: {len(args.prerequisites.split(chr(10)))} items")
-                if args.acceptance:
-                    print(f"   Acceptance Criteria: {len(args.acceptance.split(chr(10)))} items")
-                if args.goal:
-                    print(f"   Goal: {args.goal[:50]}{'...' if len(args.goal) > 50 else ''}")
+                if prerequisites:
+                    print(f"   Prerequisites: {len(prerequisites.split(chr(10)))} items")
+                if acceptance:
+                    print(f"   Acceptance Criteria: {len(acceptance.split(chr(10)))} items")
+                if goal:
+                    print(f"   Goal: {goal[:50]}{'...' if len(goal) > 50 else ''}")
+            
+            elif args.task_action == 'template':
+                if args.template_action == 'list':
+                    templates = list_templates()
+                    print(f"\n📄 Available Templates ({len(templates)}):\n")
+                    for t in templates:
+                        template_file = Path(__file__).parent / "agents" / "templates" / f"template-{t}.md"
+                        # Get first line as description
+                        desc = ""
+                        if template_file.exists():
+                            first_line = template_file.read_text().split('\n')[0]
+                            desc = first_line.replace('#', '').strip() if first_line.startswith('#') else ""
+                        print(f"  • {t:<12} {desc}")
+                    print(f"\nUsage: ./team_db.py task create --template <name> ...")
+                    print(f"   or: ./team_db.py task template create <name> <title> ...")
+                    
+                elif args.template_action == 'create':
+                    template_content = load_template(args.template_name)
+                    if not template_content:
+                        print(f"❌ Template '{args.template_name}' not found")
+                        available = list_templates()
+                        if available:
+                            print(f"Available: {', '.join(available)}")
+                        sys.exit(1)
+                    
+                    description = f"## Template: {args.template_name}\n\n{template_content}\n\n---\n\n## Task: {args.title}"
+                    
+                    task_id = db.create_task(
+                        title=args.title,
+                        description=description,
+                        assignee_id=args.assign,
+                        project_id=args.project,
+                        priority=args.priority
+                    )
+                    print(f"✅ Task created from template: {task_id}")
+                    print(f"   Template: {args.template_name}")
                 
             elif args.task_action == 'assign':
                 if db.assign_task(args.task_id, args.agent_id):
