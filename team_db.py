@@ -65,6 +65,14 @@ class AITeamDB:
         if not project_id:
             raise ValueError("project_id is required - every task must belong to a project")
         
+        # MANDATORY: Task quality framework fields
+        if not expected_outcome:
+            raise ValueError("expected_outcome is REQUIRED - define what success looks like")
+        if not prerequisites:
+            raise ValueError("prerequisites is REQUIRED - list what must be ready first")
+        if not acceptance_criteria:
+            raise ValueError("acceptance_criteria is REQUIRED - define how to verify completion")
+        
         task_id = f"T-{datetime.now().strftime('%Y%m%d')}-{self._get_next_task_number():03d}"
         
         cursor = self.conn.cursor()
@@ -646,6 +654,119 @@ class AITeamDB:
             print(f"[Error] Failed to update context: {e}")
             return False
 
+    # ========== Agent Working Memory ==========
+
+    def get_working_memory(self, agent_id: str) -> dict:
+        """Get agent's working memory (like WORKING.md)"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT current_task_id, working_notes, blockers, next_steps, last_updated
+            FROM agent_working_memory WHERE agent_id = ?
+        ''', (agent_id,))
+        row = cursor.fetchone()
+        if row:
+            return {
+                'current_task_id': row[0],
+                'working_notes': row[1],
+                'blockers': row[2],
+                'next_steps': row[3],
+                'last_updated': row[4]
+            }
+        return None
+
+    def update_working_memory(self, agent_id: str, **fields) -> bool:
+        """Update agent's working memory"""
+        cursor = self.conn.cursor()
+        valid_fields = ['current_task_id', 'working_notes', 'blockers', 'next_steps']
+        
+        updates = []
+        params = []
+        for field, value in fields.items():
+            if field in valid_fields:
+                updates.append(f"{field} = ?")
+                params.append(value)
+        
+        if not updates:
+            return False
+        
+        params.append(agent_id)
+        query = f'''
+            UPDATE agent_working_memory 
+            SET {', '.join(updates)}, last_updated = CURRENT_TIMESTAMP
+            WHERE agent_id = ?
+        '''
+        
+        try:
+            cursor.execute(query, params)
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            print(f"[Error] Failed to update working memory: {e}")
+            return False
+
+    # ========== Inter-Agent Communication ==========
+
+    def send_message(self, from_agent: str, message: str, to_agent: str = None,
+                     task_id: str = None, msg_type: str = 'comment') -> int:
+        """Send message between agents"""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO agent_communications 
+                (from_agent_id, to_agent_id, task_id, message, message_type)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (from_agent, to_agent, task_id, message, msg_type))
+            self.conn.commit()
+            return cursor.lastrowid
+        except Exception as e:
+            print(f"[Error] Failed to send message: {e}")
+            return None
+
+    def get_messages(self, agent_id: str = None, task_id: str = None,
+                     unread_only: bool = False, limit: int = 50) -> list:
+        """Get messages for agent or task"""
+        cursor = self.conn.cursor()
+        
+        query = '''
+            SELECT c.*, 
+                   from_a.name as from_name,
+                   to_a.name as to_name
+            FROM agent_communications c
+            JOIN agents from_a ON c.from_agent_id = from_a.id
+            LEFT JOIN agents to_a ON c.to_agent_id = to_a.id
+            WHERE 1=1
+        '''
+        params = []
+        
+        if agent_id:
+            query += ' AND (c.to_agent_id = ? OR c.from_agent_id = ?)'
+            params.extend([agent_id, agent_id])
+        if task_id:
+            query += ' AND c.task_id = ?'
+            params.append(task_id)
+        if unread_only:
+            query += ' AND c.is_read = FALSE'
+        
+        query += ' ORDER BY c.created_at DESC LIMIT ?'
+        params.append(limit)
+        
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def mark_read(self, message_id: int) -> bool:
+        """Mark message as read"""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute('''
+                UPDATE agent_communications 
+                SET is_read = TRUE WHERE id = ?
+            ''', (message_id,))
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            print(f"[Error] Failed to mark read: {e}")
+            return False
+
 
 def load_template(template_name: str) -> str:
     """Load a template file from agents/templates/"""
@@ -772,6 +893,39 @@ def main():
     ctx_learn = context_sub.add_parser('learn', help='Add learning to agent')
     ctx_learn.add_argument('agent_id', help='Agent ID')
     ctx_learn.add_argument('learning', help='Learning to add')
+    
+    # Agent working memory commands
+    memory = agent_sub.add_parser('memory', help='Manage agent working memory (WORKING.md)')
+    memory_sub = memory.add_subparsers(dest='memory_action')
+    
+    mem_show = memory_sub.add_parser('show', help='Show working memory')
+    mem_show.add_argument('agent_id', help='Agent ID')
+    
+    mem_update = memory_sub.add_parser('update', help='Update working memory')
+    mem_update.add_argument('agent_id', help='Agent ID')
+    mem_update.add_argument('--notes', help='Working notes')
+    mem_update.add_argument('--blockers', help='Current blockers')
+    mem_update.add_argument('--next-steps', help='Next steps planned')
+    mem_update.add_argument('--task', help='Current task ID')
+    
+    # Agent communication commands
+    comm = agent_sub.add_parser('comm', help='Inter-agent communication')
+    comm_sub = comm.add_subparsers(dest='comm_action')
+    
+    comm_send = comm_sub.add_parser('send', help='Send message')
+    comm_send.add_argument('from_agent', help='From agent ID')
+    comm_send.add_argument('message', help='Message content')
+    comm_send.add_argument('--to', help='To agent ID (optional - broadcast if not set)')
+    comm_send.add_argument('--task', help='Related task ID')
+    comm_send.add_argument('--type', choices=['comment', 'mention', 'request', 'response'],
+                          default='comment', help='Message type')
+    
+    comm_inbox = comm_sub.add_parser('inbox', help='Check inbox')
+    comm_inbox.add_argument('agent_id', help='Agent ID')
+    comm_inbox.add_argument('--unread', action='store_true', help='Show only unread')
+    
+    comm_task = comm_sub.add_parser('task', help='Show task messages')
+    comm_task.add_argument('task_id', help='Task ID')
     
     # Dashboard commands
     dash_parser = subparsers.add_parser('dashboard', help='Dashboard')
@@ -987,7 +1141,66 @@ def main():
                             print(f"✅ Added learning to {args.agent_id}")
                     else:
                         print(f"⚠️ Agent {args.agent_id} not found")
+                        
+            elif args.agent_action == 'memory':
+                if args.memory_action == 'show':
+                    mem = db.get_working_memory(args.agent_id)
+                    if mem:
+                        print(f"\n📝 Working Memory: {args.agent_id}\n")
+                        print(f"📌 Current Task: {mem.get('current_task_id') or 'None'}\n")
+                        print(f"📝 Notes:\n{mem.get('working_notes', 'Empty')}\n")
+                        print(f"🚧 Blockers:\n{mem.get('blockers', 'None')}\n")
+                        print(f"📋 Next Steps:\n{mem.get('next_steps', 'None')}\n")
+                        print(f"🕐 Last Updated: {mem.get('last_updated', 'Never')}")
+                    else:
+                        print(f"⚠️ No working memory for {args.agent_id}")
+                        
+                elif args.memory_action == 'update':
+                    kwargs = {}
+                    if args.notes:
+                        kwargs['working_notes'] = args.notes
+                    if args.blockers:
+                        kwargs['blockers'] = args.blockers
+                    if args.next_steps:
+                        kwargs['next_steps'] = args.next_steps
+                    if args.task:
+                        kwargs['current_task_id'] = args.task
                     
+                    if kwargs and db.update_working_memory(args.agent_id, **kwargs):
+                        print(f"✅ Updated working memory for {args.agent_id}")
+                    else:
+                        print(f"⚠️ Nothing to update")
+                        
+            elif args.agent_action == 'comm':
+                if args.comm_action == 'send':
+                    msg_id = db.send_message(
+                        args.from_agent, args.message,
+                        args.to, args.task, args.type
+                    )
+                    if msg_id:
+                        to_str = f"to {args.to}" if args.to else "(broadcast)"
+                        print(f"✅ Message sent {to_str}: ID {msg_id}")
+                    else:
+                        print(f"❌ Failed to send message")
+                        
+                elif args.comm_action == 'inbox':
+                    messages = db.get_messages(
+                        args.agent_id, unread_only=args.unread
+                    )
+                    print(f"\n📬 Inbox for {args.agent_id} ({len(messages)} messages)\n")
+                    for m in messages:
+                        read_status = "🔴" if not m['is_read'] else "✅"
+                        to_str = f"→ {m['to_name']}" if m['to_name'] else "(broadcast)"
+                        print(f"{read_status} [{m['message_type']}] {m['from_name']} {to_str}")
+                        print(f"   {m['message'][:60]}{'...' if len(m['message']) > 60 else ''}")
+                        print(f"   🕐 {m['created_at']}\n")
+                        
+                elif args.comm_action == 'task':
+                    messages = db.get_messages(task_id=args.task_id)
+                    print(f"\n💬 Task Messages for {args.task_id} ({len(messages)} messages)\n")
+                    for m in messages:
+                        print(f"[{m['from_name']}] {m['message'][:80]}")
+        
         elif args.command == 'dashboard':
             stats = db.get_dashboard_stats()
             print("\n📊 Dashboard Stats:\n")
