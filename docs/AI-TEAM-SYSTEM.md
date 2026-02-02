@@ -1,6 +1,6 @@
 # 🤖 AI Team System
 
-**Version:** 3.1.0  
+**Version:** 3.4.4  
 **Created:** 2026-02-01  
 **Updated:** 2026-02-02  
 **Status:** Active  
@@ -21,7 +21,8 @@
 9. [Communication Protocol](#9-communication-protocol)
 10. [Tools Reference](#10-tools-reference)
 11. [Cron Monitoring System](#11-cron-monitoring-system)
-12. [Version History](#12-version-history)
+12. [Dashboard (Kanban)](#12-dashboard-kanban)
+13. [Version History](#13-version-history)
 
 ---
 
@@ -259,14 +260,17 @@ CREATE TABLE tasks (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT,
-    project_id TEXT,
+    project_id TEXT NOT NULL,  -- ⚠️ MANDATORY: Every task must have a project
     assignee_id TEXT,
     status TEXT DEFAULT 'todo' 
         CHECK (status IN ('todo', 'in_progress', 'review', 'done', 'blocked', 'cancelled')),
+    blocked_reason TEXT,  -- เหตุผลที่ถูก block (fix-loop-exceeded, info-required, etc.)
     priority TEXT DEFAULT 'normal' 
         CHECK (priority IN ('critical', 'high', 'normal', 'low')),
     progress INTEGER DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
     estimated_hours REAL,
+    actual_duration_minutes INTEGER,  -- ระยะเวลาที่ใช้จริง (นาที) คำนวณจาก started_at -> completed_at
+    fix_loop_count INTEGER DEFAULT 0,  -- จำนวนรอบแก้ไข (สำหรับ auto-fix tracking)
     actual_hours REAL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     started_at DATETIME,
@@ -367,7 +371,7 @@ Created (via Orchestrator/PM)
 | Action | DB Operation | When |
 |--------|-------------|------|
 | Create project | `INSERT INTO projects` | New project starts |
-| Create task | `INSERT INTO tasks` | Spawn task for agent |
+| Create task | `INSERT INTO tasks` | Spawn task for agent (MUST include project_id) |
 | Assign task | `UPDATE tasks SET assignee_id` | Assign to agent |
 | Monitor | `SELECT * FROM v_dashboard_stats` | Periodic check |
 | Escalate | `UPDATE tasks SET status = 'blocked'` | Issue detected |
@@ -404,6 +408,61 @@ Created (via Orchestrator/PM)
 |--------|-------------|------|
 | Heartbeat | `UPDATE agents SET last_heartbeat` | Every 10 min |
 | Update status | `UPDATE agents SET status` | State change |
+
+#### Orchestrator (Block Handling)
+
+| Action | DB Operation | When |
+|--------|-------------|------|
+| Block task | `UPDATE tasks SET status = 'blocked', blocked_reason = ?` | Fix loop > 10, info needed |
+| Release agent | `UPDATE agents SET status = 'idle', current_task_id = NULL` | After task blocked |
+| Reassign | `UPDATE tasks SET assignee_id = ?` | Assign new task to idle agent |
+
+---
+
+### 5.4a Validation Rules (MANDATORY)
+
+#### Rule 1: Every Task Must Have Project
+```
+❌ INVALID: INSERT INTO tasks (title) VALUES ('Task name')
+✅ VALID:   INSERT INTO tasks (title, project_id) VALUES ('Task name', 'PROJ-001')
+
+Error if project_id is NULL: "ERROR: Every task must have a project"
+```
+
+**Check before creating task:**
+```python
+if not project_id:
+    raise ValueError("project_id is required - every task must belong to a project")
+```
+
+#### Rule 2: Task ID Format (MANDATORY)
+
+**Format:** `T-YYYYMMDD-NNN`
+
+| Component | Description | Example |
+|-----------|-------------|---------|
+| `T` | Task prefix | T |
+| `YYYYMMDD` | Date (4-digit year, 2-digit month, 2-digit day) | 20260202 |
+| `NNN` | Sequence number (3 digits, leading zeros) | 001, 012, 123 |
+
+**Valid Examples:**
+- ✅ `T-20260202-001` (Jan 1st task)
+- ✅ `T-20260202-012` (12th task of the day)
+- ✅ `T-20260202-123` (123rd task of the day)
+
+**Invalid Examples:**
+- ❌ `T-20260202-1` (missing leading zeros)
+- ❌ `T-20260202-01` (only 2 digits)
+- ❌ `T-20260202-24` (missing leading zero)
+- ❌ `Task-001` (wrong prefix)
+- ❌ `20260202-001` (missing T prefix)
+
+**Enforcement:**
+```python
+# In team_db.py - auto-generated with :03d format
+task_id = f"T-{datetime.now().strftime('%Y%m%d')}-{self._get_next_task_number():03d}"
+# Result: T-20260202-001 (always 3 digits)
+```
 
 ---
 
@@ -449,6 +508,188 @@ python3 team_db.py report --daily
 **Rule of Thumb:**
 - **team.db** = ข้อมูลที่ต้อง query, aggregate, report ได้
 - **memory/*.md** = รายละเอียดเชิงลึกที่อ่านเป็นบทความ
+
+---
+
+## 5.7 Autonomous Fix Protocol (NEW)
+
+**Rule:** Orchestrator **MUST** autonomously fix ALL issues until none remain. **DO NOT ASK** user for permission to fix.
+
+### Auto-Fix Loop (แก้ไขวนไปจนกว่าจะไม่มีปัญหา)
+
+```
+Agent: "✅ Task complete. Delivered: [files]"
+    │
+    ▼
+┌─────────────────────────────┐
+│  Orchestrator (Auto-check)  │
+│                             │
+│  1. ตรวจสอบผลงาน            │
+│  2. พบปัญหา?                │
+│     ├── YES → แก้ไขทันที    │
+│     │        ↓              │
+│     │      (วนกลับไป 1)     │
+│     │                       │
+│     └── NO  → อัพเดต done   │
+└─────────────────────────────┘
+```
+
+### Fix Until Clean
+
+**หลักการ:** แก้ไขซ้ำไปเรื่อยๆ จนกว่าจะไม่พบปัญหา
+
+| รอบ | พบปัญหา | การกระทำ |
+|-----|---------|----------|
+| 1 | Path ผิด, ชื่อไฟล์ผิด | ย้าย + Rename |
+| 2 | ขาด import, syntax error | เพิ่ม import, fix syntax |
+| 3 | Test fail | แก้ code ตาม test |
+| 4 | Lint error | จัด format |
+| 5 | (ไม่มีปัญหา) | ✅ Done |
+
+**คำสั่งตัวเอง:** "Fix it again. And again. Until clean."
+
+### ⚠️ MANDATORY: Test Before Marking Complete
+
+**Agents MUST test before reporting "complete":**
+
+```
+Before: "✅ Task complete"
+        ↓
+   1. Syntax check (php -l, etc.)
+   2. Database query check (if applicable)
+   3. Basic functionality test
+   4. Check for obvious errors
+        ↓
+After: Confirm working → "✅ Task complete"
+```
+
+**Testing Checklist:**
+- [ ] **Syntax Validation**: `php -l file.php`, `python -m py_compile file.py`
+- [ ] **Database Check**: ตรวจสอบ columns ที่ใช้มีจริง
+- [ ] **Query Test**: รัน SQL query ที่เขียน
+- [ ] **File Existence**: ตรวจสอบไฟล์ที่อ้างอิงมีจริง
+- [ ] **Basic Run**: ถ้าเป็น web → เปิดดู; ถ้าเป็น script → รันทดสอบ
+
+**Example Error (ที่ต้องจับได้):**
+```
+❌ Bad:  Query uses a.avatar_url (column doesn't exist)
+✅ Good: Test query first → Find error → Fix → Then report complete
+```
+
+**If test fails:**
+1. Fix the issue (don't report complete yet)
+2. Test again
+3. Only report complete when tests pass
+
+### Auto-Fix Categories (แก้ได้ทันที)
+
+| หมวด | ตัวอย่าง | แก้ไข |
+|------|---------|--------|
+| **Path/File** | อยู่ผิดที่, ชื่อผิด | ย้าย, rename |
+| **Code** | Syntax error, missing import | Fix, add import |
+| **Config** | ขาด config, env | เพิ่มตาม template |
+| **Test** | Test fail, no coverage | แก้ code, เพิ่ม test |
+| **Lint** | Format ผิด, style | Auto-fix lint |
+| **Doc** | ขาด README, type | Generate, add |
+
+### When to STOP and ASK (หยุดเมื่อ)
+
+หยุดแก้อัตโนมัติ และถามผู้ใช้เมื่อ:
+- **ไม่รู้ว่าต้องแก้ยังไง** (ไม่เข้าใจ error)
+- **แก้แล้วพัง** (fix นึงทำให้เกิดปัญหาใหม่)
+- **วนลูป > 10 รอบ** (hard limit) → เปลี่ยน status เป็น **blocked**
+- **ต้องตัดสินใจเรื่อง design/architecture**
+- **ต้องการข้อมูลเพิ่มเติม** จาก user → เปลี่ยน status เป็น **blocked**
+
+### Safety Limit: 10 Fix Rounds
+
+```
+รอบที่ 1-5:  แก้ไขตามปกติ
+รอบที่ 6-9:  แจ้งเตือน Telegram "⚠️ Fix loop warning: X rounds"
+รอบที่ 10:   STOP → แจ้ง Telegram → เปลี่ยน status เป็น blocked
+```
+
+### Blocked Status Usage
+
+**⚠️ IMPORTANT: Block the TASK, not the AGENT**
+
+```
+When task needs to be blocked:
+    │
+    ├──> Task.status = 'blocked'
+    ├──> Task.blocked_reason = '[reason]'
+    ├──> Agent.status = 'idle'          <-- Agent ว่างแล้ว
+    ├──> Agent.current_task_id = NULL   <-- ไม่มีงานติดตัว
+    └──> Agent รับงานใหม่ได้ทันที
+```
+
+**ผลลัพธ์:** Agent ว่าง → รับงานใหม่ได้ → ไม่ waste resource
+
+| สถานการณ์ | Task | Agent | blocked_reason |
+|-----------|------|-------|----------------|
+| วนลูปแก้ไข > 10 รอบ | blocked | idle | fix-loop-exceeded |
+| ต้องการข้อมูลเพิ่ม | blocked | idle | info-required |
+| ไม่เข้าใจ requirements | blocked | idle | unclear-requirements |
+| ต้องตัดสินใจ design | blocked | idle | needs-design-decision |
+
+### Agent Reassignment After Block
+
+```
+Task T-001 (blocked) ──> Agent A หลุด (idle)
+                              │
+                              ▼
+                    รับ Task T-002 ใหม่ทันที
+```
+
+**อย่าทำแบบนี้:**
+```
+❌ ผิด: Agent.status = 'blocked'  (Agent ติดๆ ไม่ทำงาน)
+```
+
+**ทำแบบนี้:**
+```
+✅ ถูก: Task.status = 'blocked'   (งานติด, คนไม่ติด)
+       Agent.status = 'idle'     (คนว่าง ไปทำงานอื่น)
+```
+
+### Telegram Notifications (MANDATORY)
+
+**ส่งข้อความไป Telegram เมื่อมีการเปลี่ยนแปลงใดๆ:**
+
+#### Task Created (สร้างงานใหม่)
+| เหตุการณ์ | ข้อความ |
+|-----------|----------|
+| Task ถูกสร้าง | 🆕 Task #XXX: [ชื่อ] ถูกสร้างแล้ว (Assignee: [Agent]) |
+
+#### EVERY Status Change (ทุกการเปลี่ยน status)
+| จาก | เป็น | ข้อความ |
+|------|------|----------|
+| todo | in_progress | 🚀 Task #XXX เริ่มทำแล้ว (Agent) |
+| in_progress | review | 👀 Task #XXX ส่งรีวิว |
+| review | done | ✅ Task #XXX เสร็จสมบูรณ์ |
+| any | blocked | 🚫 Task #XXX ถูก block (เหตุผล) |
+| blocked | in_progress | 🔄 Task #XXX กลับมาทำต่อ |
+
+#### Other Events
+- ⚠️ Fix loop ครบ 5, 8, 10 รอบ
+- 📊 สรุปรายวัน
+
+**Rule:** ทุกการสร้าง task และทุกการเปลี่ยน status ต้องแจ้ง Telegram ทันที ไม่มีข้อยกเว้น
+
+### Example
+
+**Before (Ask):**
+```
+Agent: "เสร็จแล้ว แต่ไฟล์อยู่ผิดที่"
+User: "ย้ายไปให้ถูกสิ"
+Agent: "ย้ายแล้ว"
+```
+
+**After (Auto-fix):**
+```
+Agent: "เสร็จแล้ว แต่ไฟล์อยู่ผิดที่"
+Orchestrator: "[Auto-fix] ย้ายไฟล์ไป [correct-path] แล้ว"
+```
 
 ---
 
@@ -617,10 +858,78 @@ QA Quinn: Done - ผ่านการทดสอบทั้งหมด
 
 ---
 
-## 12. Version History
+## 12. Dashboard (Kanban)
+
+### 12.1 Kanban Board View
+
+Dashboard แสดงผลแบบ **Kanban Board** แทนตาราง:
+
+```
+┌─────────────┬─────────────┬─────────────┬─────────────┬─────────────┐
+│    TODO     │ IN PROGRESS │   REVIEW    │    DONE     │   BLOCKED   │
+├─────────────┼─────────────┼─────────────┼─────────────┼─────────────┤
+│ 📝 Task A   │ 🔄 Task B   │ 👀 Task C   │ ✅ Task D   │ 🚧 Task E   │
+│ 🔴 Critical │ 🟠 High     │ 🟡 Normal   │             │ ⚠️ Loop >10 │
+│ 📅 Due: 2d  │ ⏱️ 2h 30m   │             │             │ ❓ Info needed│
+├─────────────┼─────────────┼─────────────┼─────────────┼─────────────┤
+│ 📝 Task F   │ 🔄 Task G   │             │             │             │
+│ 🟡 Normal   │ 🟠 High     │             │             │             │
+│ 📅 Due: 5d  │ ⏱️ 45m      │             │             │             │
+└─────────────┴─────────────┴─────────────┴─────────────┴─────────────┘
+```
+
+### 12.2 Task Card Information
+
+แต่ละ Card แสดง:
+- **ไอคอน + ชื่องาน**
+- **สี Priority**: 🔴 Critical, 🟠 High, 🟡 Normal, 🟢 Low
+- **Assignee Avatar**
+- **Duration**: ⏱️ ระยะเวลาที่ใช้ (คำนวณจาก started_at → now/completed_at)
+- **Due Date**: 📅 กำหนดส่ง
+- **Blocked Reason**: ⚠️ แสดงเหตุผลถ้า status = blocked
+
+### 12.3 Duration Tracking
+
+| Field | Description |
+|-------|-------------|
+| `started_at` | เวลาเริ่มงาน (auto-set when status → in_progress) |
+| `completed_at` | เวลาเสร็จ (auto-set when status → done) |
+| `actual_duration_minutes` | ระยะเวลาที่ใช้จริง (auto-calculated) |
+
+**คำนวณอัตโนมัติ:**
+```
+ถ้า status = done:
+  duration = completed_at - started_at
+ถ้า status = in_progress:
+  duration = now - started_at (real-time)
+```
+
+### 12.4 Drag & Drop
+
+- ลาก Task ไปยัง Column อื่นเพื่อเปลี่ยน status
+- Auto-update database ทันที
+- บันทึก history การย้าย
+
+### 12.5 Blocked Column
+
+แสดงเฉพาะ Task ที่ status = blocked พร้อม:
+- 🔴 Red border highlight
+- Blocked reason badge
+- "Unblock" button (สำหรับ Orchestrator)
+
+---
+
+## 13. Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| **3.4.4** | 2026-02-02 | Added Task Created notification: Telegram alert when new task is created with assignee |
+| **3.4.3** | 2026-02-02 | Mandatory Telegram notifications for EVERY task status change (todo→in_progress, in_progress→review, review→done, etc.) |
+| **3.4.2** | 2026-02-02 | Clarified Blocked Status: Block the TASK (not the AGENT) so agent can be reassigned to other work immediately |
+| **3.4.1** | 2026-02-02 | Added MANDATORY testing requirement: Agents must test (syntax, database, basic functionality) before marking tasks complete |
+| **3.4.0** | 2026-02-02 | Added Kanban Dashboard, Duration Tracking, Telegram Notifications, Fix Loop Limit (10), Blocked Status with reason |
+| **3.3.0** | 2026-02-02 | Enhanced Autonomous Fix Protocol: Fix ALL issues iteratively until clean (Fix Until Clean principle) |
+| **3.2.0** | 2026-02-02 | Added Autonomous Fix Protocol: Orchestrator auto-fixes issues after agent reports without asking permission |
 | **3.1.0** | 2026-02-02 | Added Cron Monitoring System section (active jobs, monitoring rules, alerts, reports) |
 | **3.0.0** | 2026-02-02 | **Major:** Renamed to AI-TEAM-SYSTEM.md, added comprehensive Database System section (schema, data flow, agent-db contracts) |
 | 2.0.0 | 2026-02-02 | Added Decision Matrix, Timeouts, Quality Gates, Fallback Plans, Resource Guidelines |
@@ -645,6 +954,101 @@ QA Quinn: Done - ผ่านการทดสอบทั้งหมด
 | `~/clawd/memory/team/TASK-BOARD.md` | Kanban board view |
 | `~/clawd/memory/team/PROJECT-STATUS.md` | Project status view |
 
+---
+
+## 12. Agent Memory System (Context & Learning)
+
+ระบบความจำของ Agents แบบ persistent - เก็บ context และ learnings ใน database
+
+### 12.1 Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  Agent Memory System                 │
+├─────────────────────────────────────────────────────┤
+│  agent_context table                                │
+│  ├── agent_id      : รหัส agent                     │
+│  ├── context       : บทบาทและความเชี่ยวชาญ        │
+│  ├── learnings     : สิ่งที่เรียนรู้จากงาน         │
+│  ├── preferences   : การตั้งค่าส่วนตัว              │
+│  └── last_updated  : เวลาอัพเดตล่าสุด               │
+└─────────────────────────────────────────────────────┘
+```
+
+### 12.2 How It Works
+
+#### Memory Flow
+```
+1. Auto-Assign หา Agent ที่ว่าง
+        ↓
+2. อ่าน Context ของ Agent จาก database
+        ↓
+3. ส่ง Context + Task Details ให้ Subagent
+        ↓
+4. Subagent ใช้ Context เป็น "ความจำ" เริ่มต้น
+        ↓
+5. เมื่อทำงานเสร็จ → อัพเดต Learnings
+```
+
+#### Memory Maintenance (ทุกชั่วโมง)
+```
+memory_maintenance.py รัน:
+├── Reset stale agents (>1h ไม่มี heartbeat)
+├── Update learnings จาก completed tasks
+└── Archive old history (>30 วัน)
+```
+
+### 12.3 CLI Commands
+
+```bash
+# ดู context ของ agent
+python3 team_db.py agent context show <agent_id>
+
+# อัพเดต context
+python3 team_db.py agent context update <agent_id> \
+  --field context --content "# Role\nExpert in..."
+
+# เพิ่ม learning
+python3 team_db.py agent context learn <agent_id> \
+  "Learned: Always use transactions"
+```
+
+### 12.4 Context Example
+
+**Agent: Amelia (Developer)**
+```markdown
+# Developer Amelia
+
+## Role
+Full-stack developer สำหรับ Nurse AI Project
+
+## Expertise
+- Laravel/PHP
+- Livewire components
+- Tailwind CSS
+- SQLite/MySQL
+
+## Recent Learnings
+- Completed: User authentication system
+- Completed: Database migration tools
+- Learned: Always validate inputs before DB operations
+```
+
+### 12.5 Benefits
+
+| Feature | Benefit |
+|---------|---------|
+| **Persistent Context** | Agent จำบทบาทตัวเองได้ |
+| **Learning Accumulation** | เก็บบทเรียนจากงานก่อน ๆ |
+| **Auto-Cleanup** | ล้างข้อมูลเก่าอัตโนมัติ |
+| **Stale Detection** | รีเซ็ต agents ที่ค้าง |
+
+---
+
+## 13. Cron Monitoring System
+
+ระบบ Cron สำหรับติดตามสถานะ AI Team อัตโนมัติ แจ้งเตือนผ่าน Telegram
+
 ### Agent Configs
 | File | Purpose |
 |------|---------|
@@ -656,15 +1060,17 @@ QA Quinn: Done - ผ่านการทดสอบทั้งหมด
 
 ระบบ Cron สำหรับติดตามสถานะ AI Team อัตโนมัติ แจ้งเตือนผ่าน Telegram
 
-### 11.1 Active Cron Jobs
+### 13.1 Active Cron Jobs
 
-| Job Name | Schedule | Purpose | Action |
-|----------|----------|---------|--------|
-| **ai-team-heartbeat** | ทุก 5 นาที | ตรวจสอบ Agent เงียบ | Check agent heartbeats |
-| **ai-team-deadlines** | ทุก 30 นาที | ตรวจสอบ deadline | Check task deadlines |
-| **ai-team-hourly-report** | ทุกชั่วโมง (0 * * * *) | สรุปสถานะรายชั่วโมง | Generate hourly report |
-| **ai-team-daily-morning** | 08:00 ทุกวัน | รายงานเช้า | Daily morning report |
-| **ai-team-daily-evening** | 18:00 ทุกวัน | สรุปผลงานเย็น | Daily evening summary |
+| Job Name | Schedule | Purpose |
+|----------|----------|---------|
+| **ai-team-heartbeat** | ทุก 5 นาที | ตรวจสอบ Agent เงียบ/ค้าง |
+| **ai-team-auto-assign** | ทุก 10 นาที | Auto-assign งานให้ agents |
+| **ai-team-memory-maint** | ทุกชั่วโมง | อัพเดต learnings + reset stale |
+| **ai-team-deadlines** | ทุก 30 นาที | ตรวจสอบ deadline |
+| **ai-team-hourly-report** | ทุกชั่วโมง | สรุปสถานะรายชั่วโมง |
+| **ai-team-daily-morning** | 08:00 ทุกวัน | รายงานเช้า |
+| **ai-team-daily-evening** | 18:00 ทุกวัน | สรุปผลงานเย็น |
 
 ### 11.2 Monitoring Rules
 
@@ -873,6 +1279,85 @@ CREATE TABLE alert_history (
 | **Critical** | Task overdue > 1 day, Project overdue | Immediate | Telegram + Escalate |
 | **Warning** | Agent silent > 30 min, Task blocked > 2h | 5 minutes | Telegram alert |
 | **Info** | Task due today, Hourly summary | N/A | Telegram notification |
+
+---
+
+## 12. Alert Response Workflow
+
+เมื่อได้รับการแจ้งเตือนจาก Health Monitor ต้องทำตามขั้นตอนนี้:
+
+### 12.1 ประเภท Alerts และการตอบสนอง
+
+| Alert Type | เงื่อนไข | การตอบสนองอัตโนมัติ | การแจ้งผู้ใช้ |
+|------------|----------|---------------------|--------------|
+| **Agent Stuck** | Task in_progress > 2h ไม่มี progress | 1. ตรวจสอบ subagent session ยังทำงานอยู่หรือไม่<br>2. ถ้าค้าง → unblock task, reset agent เป็น idle<br>3. รี(assign) ให้ agent อื่นหรือให้ agent เดิมเริ่มใหม่ | แจ้งเมื่อต้อง reassign |
+| **Agent Offline** | Heartbeat หาย > 60 min | 1. ตั้ง agent status = offline<br>2. ย้ายงานที่กำลังทำ → ให้ agent อื่น<br>3. Log ว่า agent offline | แจ้งทันที |
+| **Task Stuck** | In progress > 2h ไม่มี progress update | 1. ตรวจสอบว่าเป็น subagent หรือไม่<br>2. ถ้า subagent ค้าง → kill session<br>3. Block task + ปล่อย agent<br>4. รอผู้ใช้ตัดสินใจ (continue/abort/reassign) | แจ้งทันที พร้อมตัวเลือก |
+| **Fix Loop Exceeded** | Fix attempts > 10 | 1. Block task<br>2. ปล่อย agent เป็น idle<br>3. แจ้งผู้ใช้พร้อมเหตุผล | แจ้งทันที |
+
+### 12.2 Response Commands
+
+```bash
+# ตรวจสอบสถานะล่าสุด
+python3 team_db.py health status
+
+# ตรวจสอบเฉพาะ task ที่ค้าง
+python3 team_db.py task list --status in_progress --stuck
+
+# Unblock และ reassign
+python3 team_db.py task unblock <task_id>
+python3 team_db.py task reassign <task_id> <new_agent>
+
+# Kill subagent session (ถ้าค้าง)
+openclaw sessions list --active
+openclaw sessions kill <session_id>
+
+# รีเซ็ต agent
+python3 team_db.py agent reset <agent_id>
+```
+
+### 12.3 Decision Tree
+
+```
+ได้รับ Alert "Task Stuck"
+         │
+         ▼
+┌─────────────────────┐
+│ Subagent ยังทำงาน? │
+└─────────────────────┘
+    │           │
+   Yes          No
+    │           │
+    ▼           ▼
+┌─────────┐  ┌──────────────────┐
+│ รอต่อ?  │  │ Agent ยัง active?│
+│ > 30 min│  └──────────────────┘
+└─────────┘       │          │
+    │            Yes         No
+   Yes            │          │
+    │             ▼          ▼
+    ▼      ┌──────────┐  ┌─────────┐
+┌────────┐ │ Auto-kill │  │ Unblock │
+│ Kill   │ │ session   │  │ task    │
+│session │ └──────────┘  └─────────┘
+└────────┘      │              │
+    │           ▼              ▼
+    │    ┌─────────────────────────┐
+    └───>│ Block task + Release    │
+         │ agent → Notify user     │
+         └─────────────────────────┘
+```
+
+### 12.4 User Response Options
+
+เมื่อผู้ใช้ได้รับแจ้งเตือน สามารถตอบ:
+
+| คำสั่ง | ผลลัพธ์ |
+|--------|---------|
+| "continue" / "ทำต่อ" | Unblock task, agent เริ่มทำใหม่ |
+| "reassign to [agent]" / "ให้ [ชื่อ] ทำ" | Reassign ให้ agent ใหม่ |
+| "abort" / "ยกเลิก" | Cancel task, agent ว่าง |
+| "check" / "ตรวจสอบ" | รายงานสถานะปัจจุบัน |
 
 ---
 
