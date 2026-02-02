@@ -172,7 +172,7 @@ class AutoAssign:
             
             cursor.execute('''
                 INSERT INTO task_history (task_id, agent_id, action, notes)
-                VALUES (?, ?, 'auto_assigned', 'Auto-assigned by system with context')
+                VALUES (?, ?, 'assigned', 'Auto-assigned by system with context')
             ''', (task_id, agent_id))
             
             self.conn.commit()
@@ -221,36 +221,20 @@ class AutoAssign:
 **Remember:** You are {agent['name']}. Use your expertise and context to complete this task effectively.
 """
 
-            # Spawn subagent
-            result = subprocess.run(
-                ['openclaw', 'sessions_spawn', 
-                 '--task', task_message,
-                 '--agent', agent['id'],
-                 '--label', f"auto-task-{task['id']}",
-                 '--runTimeoutSeconds', '1800'],  # 30 min timeout
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
+            # Update agent status to active (spawn will be handled by cron or manual)
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                UPDATE agents 
+                SET status = 'active', last_heartbeat = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (agent['id'],))
+            self.conn.commit()
             
-            success = result.returncode == 0
-            if success:
-                print(f"  🚀 Spawned {agent['name']} for {task['id']}")
-                # Update agent status
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    UPDATE agents 
-                    SET status = 'active', last_heartbeat = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                ''', (agent['id'],))
-                self.conn.commit()
-            else:
-                print(f"  ⚠️ Spawn failed: {result.stderr}")
-            
-            return success
+            print(f"  🚀 Assigned to {agent['name']} - ready to start")
+            return True
             
         except Exception as e:
-            print(f"[Error] Failed to spawn: {e}")
+            print(f"[Error] Failed to activate: {e}")
             return False
 
     def send_notification(self, message: str) -> bool:
