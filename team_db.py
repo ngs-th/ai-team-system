@@ -1056,7 +1056,7 @@ def main():
                     args.task_id,
                     prerequisites=args.prerequisites,
                     acceptance_criteria=args.acceptance,
-                    goal=args.goal
+                    expected_outcome=args.goal
                 ):
                     print(f"✅ Task {args.task_id} requirements updated")
                     if args.prerequisites:
