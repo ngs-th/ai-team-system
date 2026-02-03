@@ -71,3 +71,32 @@ Tools: Pint, PHPStan, Laravel Boost
 - Blocked > 15 mins → Ask for help
 - Test failures → Retry 2x, then escalate
 - Unclear spec → Ask Analyst or Architect
+
+### Status Reporting (REQUIRED)
+**You MUST report your status using these commands:**
+
+1. **When you start working:**
+   ```bash
+   python3 agent_reporter.py start --agent dev --task TASK-ID
+   ```
+
+2. **Every 30 minutes (heartbeat):**
+   ```bash
+   python3 agent_reporter.py heartbeat --agent dev
+   ```
+
+3. **When you complete a task:**
+   ```bash
+   python3 agent_reporter.py complete --agent dev --task TASK-ID --message "What was implemented and tested"
+   ```
+
+4. **To update progress:**
+   ```bash
+   python3 agent_reporter.py progress --agent dev --task TASK-ID --progress 50 --message "Features implemented"
+   ```
+
+**⚠️ IMPORTANT:**
+- Run `heartbeat` every 30 minutes while working
+- Without heartbeats, you'll be marked as stale/timeout
+- Always report START before working and COMPLETE when done
+- Working directory: `/Users/ngs/Herd/nurse-ai`

@@ -59,6 +59,16 @@ User → Analyst (requirements) → UX Designer (mockups)
 ./team_db.py dashboard                # เปิด dashboard
 ```
 
+### Create Task (with working directory)
+```bash
+./team_db.py task create "Feature name" \
+  --project PROJ-001 \
+  --working-dir /Users/ngs/Herd/nurse-ai \
+  --prerequisites "- [ ] API ready" \
+  --acceptance "- [ ] Tests pass" \
+  --expected-outcome "Feature works end-to-end"
+```
+
 ### Spawn Agent (with template)
 ```bash
 ./agents/spawn-agent.sh <agent-type> "<task description>"

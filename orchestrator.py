@@ -13,6 +13,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
+# Import notification system
+from notifications import NotificationManager, NotificationEvent
+
 os.environ['TZ'] = 'Asia/Bangkok'
 
 DB_PATH = Path(__file__).parent / "team.db"
@@ -26,8 +29,10 @@ class AITeamOrchestrator:
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
         self.running_missions = []
+        self.notifier = NotificationManager(db_path, TELEGRAM_CHANNEL)
         
     def close(self):
+        self.notifier.close()
         self.conn.close()
         
     def __enter__(self):
@@ -361,7 +366,19 @@ TO RESUME:
             
             self.conn.commit()
             
-            # Notify with clear status
+            # Send notification using NotificationManager
+            self.notifier.notify(
+                event=NotificationEvent.AUTO_STOP,
+                task_id=task_id,
+                task_title=task.get('title', 'Unknown'),
+                agent_id=task.get('assignee_id'),
+                agent_name=task.get('assignee_name', 'Unknown'),
+                entity_type='agent',
+                entity_id=task.get('assignee_id', 'unknown'),
+                fix_loops=new_count
+            )
+            
+            # Also send detailed message via legacy notification
             self._notify(
                 f"🚫 TASK AUTO-STOPPED: {task_id}\n"
                 f"Task exceeded 10 fix loops and was automatically stopped.\n"

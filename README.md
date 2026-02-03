@@ -60,8 +60,11 @@ php -S localhost:8080 dashboard.php
 # List tasks
 ./team_db.py task list
 
-# Create task with template
-./team_db.py task create "Implement auth" --project PROJ-001 --template feature-dev
+# Create task with template (working-dir is REQUIRED)
+./team_db.py task create "Implement auth" \
+  --project PROJ-001 \
+  --working-dir /Users/ngs/Herd/nurse-ai \
+  --template feature-dev
 
 # Block task (waiting for info)
 ./team_db.py task block T-20260202-001 "Waiting for API key from user"
@@ -109,7 +112,7 @@ Location: `team.db` (SQLite)
 **Tables:**
 - `agents` - Team members & status
 - `projects` - Project definitions
-- `tasks` - Task records with requirements, blocked_reason
+- `tasks` - Task records with requirements, working_dir, blocked_reason
 - `task_history` - Activity log
 - `task_dependencies` - Dependency graph
 

@@ -1204,6 +1204,7 @@ $statConfig = [
                 <p><strong>Priority:</strong> ${task.priority}</p>
                 <p><strong>Assignee:</strong> ${task.assignee_name || 'Unassigned'}</p>
                 <p><strong>Project:</strong> ${task.project_name || 'N/A'}</p>
+                ${task.working_dir ? `<p><strong>📁 Working Dir:</strong> <code style="background: #2d3748; padding: 2px 6px; border-radius: 4px; font-size: 0.9em;">${task.working_dir}</code></p>` : '<p><strong>📁 Working Dir:</strong> <span style="color: #f56565;">⚠️ Not set!</span></p>'}
                 ${task.created_at ? `<p><strong>📅 Created:</strong> ${formatDate(task.created_at)}</p>` : ''}
                 ${task.started_at ? `<p><strong>🚀 Started:</strong> ${formatDate(task.started_at)}</p>` : '<p><strong>🚀 Started:</strong> <span style="color: #718096">Not started yet</span></p>'}
                 ${task.completed_at ? `<p><strong>✅ Completed:</strong> ${formatDate(task.completed_at)}</p>` : ''}

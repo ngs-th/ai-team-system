@@ -96,7 +96,7 @@ class AutoAssign:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT t.id, t.title, t.description, t.priority, t.project_id,
-                   t.prerequisites, t.acceptance_criteria, t.expected_outcome
+                   t.prerequisites, t.acceptance_criteria, t.expected_outcome, t.working_dir
             FROM tasks t
             WHERE t.status = 'todo'
             AND (t.assignee_id IS NULL OR t.assignee_id = '')
@@ -187,11 +187,22 @@ class AutoAssign:
             # Build context-aware task message
             context = agent.get('context', '')
             learnings = agent.get('learnings', '')
+            working_dir = task.get('working_dir', '/Users/ngs/clawd')
             
             task_message = f"""## Task Assignment
 
 **Agent:** {agent['name']} ({agent['role']})
 **Task:** {task['id']} - {task['title']}
+
+### 📁 WORKING DIRECTORY (REQUIRED)
+**You MUST work in:** `{working_dir}`
+
+**Before doing ANYTHING:**
+```bash
+cd {working_dir}
+```
+
+**NEVER create files outside this directory!**
 
 ### Your Context
 {context}
@@ -211,14 +222,16 @@ class AutoAssign:
 {task.get('acceptance_criteria', 'None specified')}
 
 ### Instructions
-1. Review prerequisites - ensure all are met
-2. Start task: python3 team_db.py task start {task['id']}
-3. Work on the task using your expertise
-4. Update progress regularly
-5. When done: python3 team_db.py task done {task['id']}
-6. Document learnings in your context
+1. **cd {working_dir}** - Go to working directory FIRST
+2. Review prerequisites - ensure all are met
+3. Start task: python3 team_db.py task start {task['id']}
+4. Work on the task using your expertise
+5. Update progress regularly
+6. When done: python3 team_db.py task done {task['id']}
+7. Document learnings in your context
 
 **Remember:** You are {agent['name']}. Use your expertise and context to complete this task effectively.
+**CRITICAL:** Always work in `{working_dir}` - never anywhere else!
 """
 
             # Update agent status to active

@@ -1,0 +1,4 @@
+[2026-02-03T09:23:21.468236] STALE_DETECTED | Agent: analyst | Task: T-20260202-001 | Last heartbeat: 30+ minutes ago
+[2026-02-03T09:23:21.469688] STATUS_CHANGE | Agent: analyst | active → idle | Auto-reset due to timeout
+[2026-02-03T09:23:21.471424] TASK_UPDATE | Agent: analyst | Task: T-20260202-001 | in_progress → blocked | Agent timeout
+[2026-02-03T09:29:55.530269] AGENT_SPAWN | Agent: solo-dev | Task: TC101-001 | Success: False

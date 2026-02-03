@@ -19,7 +19,7 @@ def validate_tasks():
     
     # Check all non-done tasks
     cursor.execute('''
-        SELECT id, title, status, expected_outcome, prerequisites, acceptance_criteria
+        SELECT id, title, status, expected_outcome, prerequisites, acceptance_criteria, working_dir
         FROM tasks
         WHERE status NOT IN ('done', 'cancelled')
         ORDER BY status, id
@@ -36,6 +36,8 @@ def validate_tasks():
             missing.append('prerequisites')
         if not task.get('acceptance_criteria'):
             missing.append('acceptance_criteria')
+        if not task.get('working_dir'):
+            missing.append('working_dir')
         
         if missing:
             incomplete.append({
@@ -56,7 +58,8 @@ def validate_tasks():
         print("  python3 team_db.py task requirements <task_id> \\")
         print("    --expected-outcome '...' \\")
         print("    --prerequisites '- [ ] ...' \\")
-        print("    --acceptance '- [ ] ...'")
+        print("    --acceptance '- [ ] ...' \\")
+        print("    --working-dir /path/to/project")
         return False
     else:
         print(f"\n✅ All {len(tasks)} tasks have required fields!")

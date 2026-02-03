@@ -55,22 +55,25 @@ You (human) provide **GOALS** (PRDs, objectives, problems) → Orchestrator brea
 ### Submit a Goal
 
 ```bash
-# Feature development
+# Feature development (working-dir is REQUIRED)
 python3 orchestrator.py goal feature \
   "Implement Nurse Schedule View" \
   --outcome "Nurses can view their weekly schedule in calendar format" \
-  --desc "Create calendar interface showing shifts, allow filter by week/month"
+  --desc "Create calendar interface showing shifts, allow filter by week/month" \
+  --working-dir /Users/ngs/Herd/nurse-ai
 
 # Bug fix
 python3 orchestrator.py goal bugfix \
   "Fix login timeout issue" \
   --outcome "Users stay logged in for 8 hours without re-authentication" \
-  --desc "Current session expires after 15 minutes, should be 8 hours"
+  --desc "Current session expires after 15 minutes, should be 8 hours" \
+  --working-dir /Users/ngs/Herd/nurse-ai
 
 # Documentation
 python3 orchestrator.py goal documentation \
   "API Documentation for v2.0" \
-  --outcome "Complete API docs with examples for all endpoints"
+  --outcome "Complete API docs with examples for all endpoints" \
+  --working-dir /Users/ngs/Herd/nurse-ai
 ```
 
 ### Monitor Progress

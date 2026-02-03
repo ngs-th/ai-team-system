@@ -40,6 +40,7 @@ class NotificationEvent(Enum):
     PROGRESS = "progress"
     ERROR = "error"
     MILESTONE = "milestone"
+    AUTO_STOP = "auto_stop"
 
 
 import re
@@ -67,6 +68,7 @@ class NotificationManager:
             NotificationEvent.BLOCK,
             NotificationEvent.COMPLETE,
             NotificationEvent.ERROR,
+            NotificationEvent.AUTO_STOP,
         },
         NotificationLevel.NORMAL: {
             NotificationEvent.ASSIGN,
@@ -76,6 +78,7 @@ class NotificationManager:
             NotificationEvent.UNBLOCK,
             NotificationEvent.ERROR,
             NotificationEvent.MILESTONE,
+            NotificationEvent.AUTO_STOP,
         },
         NotificationLevel.VERBOSE: {
             NotificationEvent.ASSIGN,
@@ -89,6 +92,7 @@ class NotificationManager:
             NotificationEvent.ERROR,
             NotificationEvent.MILESTONE,
             NotificationEvent.PROGRESS,
+            NotificationEvent.AUTO_STOP,
         }
     }
     
@@ -105,6 +109,7 @@ class NotificationManager:
         NotificationEvent.PROGRESS: "📊",
         NotificationEvent.ERROR: "❌",
         NotificationEvent.MILESTONE: "🏁",
+        NotificationEvent.AUTO_STOP: "🛑",
     }
     
     def __init__(self, db_path: Path, telegram_channel: str = TELEGRAM_CHANNEL):
@@ -292,6 +297,9 @@ class NotificationManager:
         elif event == NotificationEvent.PROGRESS:
             progress = kwargs.get('progress', 0)
             return f"{emoji} {task_id} {progress}% | {agent}\n   {title}"
+        elif event == NotificationEvent.AUTO_STOP:
+            fix_loops = kwargs.get('fix_loops', 10)
+            return f"{emoji} {task_id} AUTO-STOPPED | {agent}\n   Fix loops: {fix_loops}/10\n   {title}"
         elif event == NotificationEvent.ERROR:
             error_msg = kwargs.get('error', 'Unknown error')
             return f"{emoji} {task_id} ERROR | {agent}\n   {error_msg}"

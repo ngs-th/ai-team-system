@@ -289,6 +289,93 @@ class HealthMonitor:
         
         return []
 
+    def check_fix_loop_violations(self) -> List[Dict]:
+        """
+        Check for tasks that have exceeded the fix loop limit (10 loops)
+        Auto-stop tasks that have reached the limit to prevent infinite loops
+        """
+        cursor = self.conn.cursor()
+        
+        # Get tasks approaching or exceeding fix loop limit
+        cursor.execute('''
+            SELECT 
+                t.id,
+                t.title,
+                t.status,
+                t.fix_loop_count,
+                t.assignee_id,
+                a.name as agent_name,
+                t.blocked_reason
+            FROM tasks t
+            LEFT JOIN agents a ON t.assignee_id = a.id
+            WHERE t.fix_loop_count >= 8
+            AND t.status IN ('in_progress', 'todo', 'review')
+            ORDER BY t.fix_loop_count DESC
+        ''')
+        
+        tasks = [dict(row) for row in cursor.fetchall()]
+        issues = []
+        
+        for task in tasks:
+            fix_loops = task['fix_loop_count'] or 0
+            task_id = task['id']
+            agent_name = task['agent_name'] or 'Unknown'
+            
+            if fix_loops >= 10:
+                # Auto-stop: Block task and release agent
+                blocked_reason = f"🛑 AUTO-STOPPED after {fix_loops} fix loops\n\nThis task has exceeded the maximum allowed fix loops (10) to prevent infinite loops and excessive token consumption.\n\nTO RESUME:\n1. Investigate the root cause manually\n2. Use: python3 orchestrator.py resume-task {task_id} --agent <agent_id>\n   or: python3 team_db.py task unblock {task_id}\n3. This will reset the fix loop counter"
+                
+                # Update task status to blocked
+                cursor.execute('''
+                    UPDATE tasks 
+                    SET status = 'blocked', 
+                        blocked_reason = ?,
+                        updated_at = datetime('now', 'localtime')
+                    WHERE id = ?
+                ''', (blocked_reason, task_id))
+                
+                # Release the agent
+                if task['assignee_id']:
+                    cursor.execute('''
+                        UPDATE agents 
+                        SET status = 'idle',
+                            current_task_id = NULL,
+                            updated_at = datetime('now', 'localtime')
+                        WHERE id = ?
+                    ''', (task['assignee_id'],))
+                
+                # Log to task history
+                cursor.execute('''
+                    INSERT INTO task_history (task_id, action, old_status, new_status, notes)
+                    VALUES (?, 'auto-stopped', ?, 'blocked', ?)
+                ''', (task_id, task['status'], f"Auto-stopped after {fix_loops} fix loops"))
+                
+                self.conn.commit()
+                
+                issues.append({
+                    'type': 'fix_loop_exceeded',
+                    'task_id': task_id,
+                    'agent_id': task['assignee_id'],
+                    'agent_name': agent_name,
+                    'severity': 'critical',
+                    'message': f"Task {task_id} AUTO-STOPPED after {fix_loops} fix loops",
+                    'fix_loops': fix_loops
+                })
+                
+            elif fix_loops >= 8:
+                # Warning: approaching limit
+                issues.append({
+                    'type': 'fix_loop_warning',
+                    'task_id': task_id,
+                    'agent_id': task['assignee_id'],
+                    'agent_name': agent_name,
+                    'severity': 'warning',
+                    'message': f"Task {task_id} approaching fix loop limit ({fix_loops}/10)",
+                    'fix_loops': fix_loops
+                })
+        
+        return issues
+
     def run_health_check(self) -> Dict:
         """Run complete health check and return results"""
         print("🔍 Running AI Team Health Check...")
@@ -333,6 +420,18 @@ class HealthMonitor:
         else:
             print("  ✅ No long-running sessions detected")
         
+        # Check 4: Fix loop violations (auto-stop after 10 loops)
+        print("\n🔄 Checking fix loop violations...")
+        fix_loop_issues = self.check_fix_loop_violations()
+        all_issues.extend(fix_loop_issues)
+        
+        if fix_loop_issues:
+            for issue in fix_loop_issues:
+                emoji = "🛑" if issue['severity'] == 'critical' else "⚠️"
+                print(f"  {emoji} {issue['message']}")
+        else:
+            print("  ✅ No fix loop violations")
+        
         # Send alerts for critical issues
         print("\n📤 Sending alerts...")
         critical_issues = [i for i in all_issues if i['severity'] == 'critical']
@@ -373,12 +472,16 @@ class HealthMonitor:
         # Auto-response for stuck tasks (> 3 hours)
         auto_resolved = self._auto_response(stuck_tasks)
         
+        # Count fix loop auto-stops
+        fix_loop_auto_stopped = len([i for i in fix_loop_issues if i['type'] == 'fix_loop_exceeded'])
+        
         return {
             'timestamp': datetime.now().isoformat(),
             'critical_count': len(critical_issues),
             'warning_count': len(warning_issues),
             'alerts_sent': alerts_sent,
             'auto_resolved': auto_resolved,
+            'fix_loop_auto_stopped': fix_loop_auto_stopped,
             'issues': all_issues
         }
 
@@ -481,6 +584,22 @@ class HealthMonitor:
         ''')
         stuck_count = cursor.fetchone()[0]
         
+        # Get fix loop status
+        cursor.execute('''
+            SELECT 
+                COUNT(CASE WHEN fix_loop_count >= 10 THEN 1 END) as auto_stopped,
+                COUNT(CASE WHEN fix_loop_count >= 8 AND fix_loop_count < 10 THEN 1 END) as warning,
+                COUNT(CASE WHEN fix_loop_count > 0 AND fix_loop_count < 8 THEN 1 END) as active
+            FROM tasks
+            WHERE fix_loop_count > 0
+        ''')
+        row = cursor.fetchone()
+        fix_loop_status = {
+            'auto_stopped': row[0] or 0,
+            'warning': row[1] or 0,
+            'active': row[2] or 0
+        }
+        
         # Get recent alerts
         cursor.execute('''
             SELECT 
@@ -502,6 +621,7 @@ class HealthMonitor:
                 'unknown': health_summary.get('unknown', 0)
             },
             'stuck_tasks': stuck_count,
+            'fix_loops': fix_loop_status,
             'agents': agents,
             'recent_alerts': recent_alerts
         }
@@ -519,6 +639,17 @@ class HealthMonitor:
         print(f"   🔴 Offline:  {status['summary']['offline']}")
         print(f"   ⚪ Unknown:  {status['summary']['unknown']}")
         print(f"\n⏱️ Stuck Tasks (>2h no update): {status['stuck_tasks']}")
+        
+        # Fix loop status
+        fix_loops = status.get('fix_loops', {})
+        if fix_loops.get('auto_stopped', 0) > 0 or fix_loops.get('warning', 0) > 0 or fix_loops.get('active', 0) > 0:
+            print(f"\n🔄 Fix Loop Status:")
+            if fix_loops.get('auto_stopped', 0) > 0:
+                print(f"   🚫 Auto-stopped (≥10 loops): {fix_loops['auto_stopped']}")
+            if fix_loops.get('warning', 0) > 0:
+                print(f"   ⚠️  Warning (8-9 loops): {fix_loops['warning']}")
+            if fix_loops.get('active', 0) > 0:
+                print(f"   🔄 Active (1-7 loops): {fix_loops['active']}")
         
         print("\n📋 Agent Details:")
         print("-" * 60)
@@ -564,6 +695,7 @@ def main():
     parser.add_argument('--daemon', action='store_true', help='Run as daemon (for cron)')
     parser.add_argument('--auto-resolve', action='store_true', help='Auto-resolve stuck tasks (>3h)')
     parser.add_argument('--resolve-task', type=str, help='Manually resolve specific stuck task ID')
+    parser.add_argument('--fix-loops', action='store_true', help='Show fix loop status for all tasks')
     
     args = parser.parse_args()
     
@@ -595,6 +727,49 @@ def main():
             ''', (task_id,))
             monitor.conn.commit()
             print(f"✅ Task {task_id} blocked, agent released")
+        elif args.fix_loops:
+            # Show fix loop status for all tasks
+            print("\n🔄 FIX LOOP STATUS")
+            print("=" * 70)
+            cursor = monitor.conn.cursor()
+            cursor.execute('''
+                SELECT 
+                    t.id,
+                    t.title,
+                    t.status,
+                    t.fix_loop_count,
+                    t.blocked_reason,
+                    a.name as assignee_name
+                FROM tasks t
+                LEFT JOIN agents a ON t.assignee_id = a.id
+                WHERE t.fix_loop_count > 0
+                ORDER BY t.fix_loop_count DESC, t.updated_at DESC
+            ''')
+            tasks = [dict(row) for row in cursor.fetchall()]
+            
+            if not tasks:
+                print("  ✅ No tasks with fix loops")
+            else:
+                print(f"\n  Found {len(tasks)} task(s) with fix loops:\n")
+                for t in tasks:
+                    status_emoji = {
+                        'blocked': '🚫', 'in_progress': '🔄', 'todo': '⬜',
+                        'review': '👀', 'done': '✅'
+                    }.get(t['status'], '⬜')
+                    
+                    warning = ""
+                    if t['fix_loop_count'] >= 10:
+                        warning = " 🛑 AUTO-STOPPED"
+                    elif t['fix_loop_count'] >= 8:
+                        warning = " ⚠️ NEAR LIMIT"
+                    
+                    print(f"  {status_emoji} {t['id']} | Loops: {t['fix_loop_count']}/10{warning}")
+                    print(f"     Title: {t['title'][:50]}...")
+                    print(f"     Status: {t['status']} | Assignee: {t['assignee_name'] or 'Unassigned'}")
+                    if t['fix_loop_count'] >= 10:
+                        print(f"     To resume: python3 orchestrator.py resume-task {t['id']} --agent <agent_id>")
+                    print()
+            print("=" * 70)
         else:
             # Default: show status
             monitor.print_health_status()

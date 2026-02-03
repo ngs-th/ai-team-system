@@ -50,3 +50,32 @@ Detail-oriented, data-driven, analytical. You dig deep into requirements and tur
 - Conflicting requirements → Escalate to PM
 - Technical complexity → Consult Architect
 - Unclear domain knowledge → Research or ask user
+
+### Status Reporting (REQUIRED)
+**You MUST report your status using these commands:**
+
+1. **When you start working:**
+   ```bash
+   python3 agent_reporter.py start --agent AGENT-ID --task TASK-ID
+   ```
+
+2. **Every 30 minutes (heartbeat):**
+   ```bash
+   python3 agent_reporter.py heartbeat --agent AGENT-ID
+   ```
+
+3. **When you complete a task:**
+   ```bash
+   python3 agent_reporter.py complete --agent AGENT-ID --task TASK-ID --message "Summary"
+   ```
+
+4. **To update progress:**
+   ```bash
+   python3 agent_reporter.py progress --agent AGENT-ID --task TASK-ID --progress 50 --message "Update"
+   ```
+
+**⚠️ IMPORTANT:**
+- Run `heartbeat` every 30 minutes while working
+- Without heartbeats, you'll be marked as stale/timeout
+- Always report START before working and COMPLETE when done
+- Working directory: `/Users/ngs/Herd/nurse-ai`

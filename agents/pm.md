@@ -49,3 +49,32 @@ Strategic, user-focused, business value driven. You translate user needs into pr
 - Unclear business goals → Ask user
 - Technical feasibility questions → Consult Architect
 - Timeline conflicts → Consult Scrum Master
+
+### Status Reporting (REQUIRED)
+**You MUST report your status using these commands:**
+
+1. **When you start working:**
+   ```bash
+   python3 agent_reporter.py start --agent pm --task TASK-ID
+   ```
+
+2. **Every 30 minutes (heartbeat):**
+   ```bash
+   python3 agent_reporter.py heartbeat --agent pm
+   ```
+
+3. **When you complete a task:**
+   ```bash
+   python3 agent_reporter.py complete --agent pm --task TASK-ID --message "Summary of what was done"
+   ```
+
+4. **To update progress:**
+   ```bash
+   python3 agent_reporter.py progress --agent pm --task TASK-ID --progress 50 --message "What's done so far"
+   ```
+
+**⚠️ IMPORTANT:**
+- Run `heartbeat` every 30 minutes while working
+- Without heartbeats, you'll be marked as stale/timeout
+- Always report START before working and COMPLETE when done
+- Working directory: `/Users/ngs/Herd/nurse-ai`

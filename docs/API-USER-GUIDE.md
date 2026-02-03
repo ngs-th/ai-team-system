@@ -70,6 +70,7 @@ python3 team_db.py agent list
 ```bash
 python3 team_db.py task create "<title>" \
   --project <project_id> \
+  --working-dir <absolute_path> \
   --desc "<description>" \
   --assign <agent_id> \
   --priority <critical|high|normal|low> \
@@ -83,6 +84,7 @@ python3 team_db.py task create "<title>" \
 ```bash
 python3 team_db.py task create "Implement User Auth" \
   --project PROJ-001 \
+  --working-dir /Users/ngs/Herd/nurse-ai \
   --desc "Create JWT-based authentication system" \
   --assign dev \
   --priority high \
@@ -99,6 +101,7 @@ python3 team_db.py task create "Implement User Auth" \
 | Field | Description |
 |-------|-------------|
 | `project` | Project ID (mandatory) |
+| `working-dir` | Absolute path where agent must work |
 | `expected-outcome` | Clear success definition |
 | `prerequisites` | Dependencies as markdown checklist |
 | `acceptance` | Verification criteria |
