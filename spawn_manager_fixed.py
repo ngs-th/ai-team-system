@@ -21,48 +21,66 @@ from audit_log import AuditLogger
 audit = AuditLogger()
 
 def get_active_sessions() -> Dict[str, datetime]:
-    """Get currently active subagent sessions from OpenClaw"""
+    """Get currently active agent sessions from OpenClaw"""
     try:
         result = subprocess.run(
-            ['openclaw', 'sessions_list', '--active-minutes', '60'],
+            ['openclaw', 'sessions', '--active', '60', '--json'],
             capture_output=True,
             text=True,
             timeout=30
         )
         if result.returncode == 0:
-            # Parse output for active sessions with task labels
+            data = json.loads(result.stdout or "{}")
             active = {}
-            for line in result.stdout.split('\n'):
-                if 'label' in line and 'T-20260202' in line:
-                    # Extract task ID from label
-                    parts = line.split()
-                    for part in parts:
-                        if 'T-20260202' in part:
-                            task_id = part.strip('",:')
-                            active[task_id] = datetime.now()
+            for session in data.get('sessions', []):
+                session_key = session.get('key', '')
+                # Expected format: agent:<agent_id>:<session>
+                parts = session_key.split(':')
+                if len(parts) >= 2 and parts[0] == 'agent':
+                    agent_id = parts[1]
+                    active[agent_id] = datetime.now()
             return active
     except Exception as e:
         print(f"[Warning] Could not get active sessions: {e}")
     return {}
 
-def get_tasks_to_spawn() -> List[Dict]:
+def get_tasks_to_spawn(task_id: Optional[str] = None) -> List[Dict]:
     """Get tasks that need spawning (assigned, todo, not being worked on)"""
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
     # Get assigned todo tasks
-    cursor.execute('''
+    where_clause = '''
+        WHERE t.status = 'todo'
+          AND t.assignee_id IS NOT NULL
+          AND t.assignee_id != ''
+          AND (t.updated_at IS NULL OR t.updated_at < datetime('now', 'localtime', '-2 minutes'))  -- Wait 2 min after assign
+    '''
+    params = []
+    if task_id:
+        where_clause += " AND t.id = ?"
+        params.append(task_id)
+
+    base_sql = f'''
         SELECT t.id, t.title, t.description, t.assignee_id, t.priority,
                t.prerequisites, t.acceptance_criteria, t.expected_outcome, t.working_dir,
+               t.review_feedback, t.review_feedback_at,
                a.name as agent_name, a.role as agent_role
         FROM tasks t
         JOIN agents a ON t.assignee_id = a.id
-        WHERE t.status = 'todo'
-        AND t.assignee_id IS NOT NULL
-        AND t.assignee_id != ''
-        AND t.updated_at < datetime('now', '-2 minutes')  -- Wait 2 min after assign
-    ''')
+        {where_clause}
+        ORDER BY
+            CASE t.priority
+                WHEN 'critical' THEN 1
+                WHEN 'high' THEN 2
+                WHEN 'normal' THEN 3
+                WHEN 'low' THEN 4
+                ELSE 5
+            END,
+            t.updated_at ASC
+    '''
+    cursor.execute(base_sql, params)
     
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
@@ -98,9 +116,29 @@ def get_agent_context(agent_id: str) -> Dict:
         return {'context': row[0] or '', 'learnings': row[1] or ''}
     return {'context': '', 'learnings': ''}
 
+def get_busy_agents() -> Dict[str, str]:
+    """Return agents that should not receive a new task (active or already assigned)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, status, current_task_id
+        FROM agents
+        WHERE status = 'active' OR current_task_id IS NOT NULL
+    ''')
+    rows = cursor.fetchall()
+    conn.close()
+    busy = {}
+    for agent_id, status, task_id in rows:
+        reason = "active" if status == "active" else "has current_task_id"
+        if task_id:
+            reason = f"{reason}:{task_id}"
+        busy[agent_id] = reason
+    return busy
+
 def build_task_message(task: Dict, agent_context: Dict) -> str:
     """Build task message with STRICT no-HTML rules"""
     working_dir = task.get('working_dir', '/Users/ngs/clawd')
+    base_dir = str(Path(__file__).parent)
     return f"""## 🚨 CRITICAL: NO HTML ALLOWED 🚨
 
 **You are {task['agent_name']} ({task['agent_role']})**
@@ -134,11 +172,31 @@ cd {working_dir}
 - **Priority:** {task['priority']}
 - **Expected Outcome:** {task.get('expected_outcome') or 'N/A'}
 
+### ✅ Prerequisites (must check 1-by-1 BEFORE starting)
+{task.get('prerequisites') or 'N/A'}
+
+If prerequisites are a checklist, mark each item:
+```bash
+python3 {base_dir}/team_db.py task check {task['id']} --field prerequisites --index <n> --done
+```
+If any prerequisite is NOT met, block the task:
+```bash
+python3 {base_dir}/team_db.py task block {task['id']} "Prerequisite not met: <reason>"
+```
+
+### ✅ Acceptance Criteria (review will require all checked)
+{task.get('acceptance_criteria') or 'N/A'}
+
+### 📌 Last Review Feedback (if any)
+{task.get('review_feedback') or 'N/A'}
+
+**Feedback Time:** {task.get('review_feedback_at') or 'N/A'}
+
 ### 📝 MANDATORY MEMORY UPDATES (ทุก 30 นาที)
 
 **ต้องอัพเดต working memory ทุก 30 นาที:**
 ```bash
-python3 agent_memory_writer.py working {task['assignee_id']} \
+python3 {base_dir}/agent_memory_writer.py working {task['assignee_id']} \
   --task {task['id']} \
   --notes "สิ่งที่กำลังทำตอนนี้" \
   --blockers "ติดปัญหาอะไร (ถ้ามี)" \
@@ -147,18 +205,32 @@ python3 agent_memory_writer.py working {task['assignee_id']} \
 
 **ก่อนจบงาน ต้อง add learning:**
 ```bash
-python3 agent_memory_writer.py learn {task['assignee_id']} \
+python3 {base_dir}/agent_memory_writer.py learn {task['assignee_id']} \
   "สิ่งที่เรียนรู้จากงานนี้"
 ```
 
 ### 📋 Instructions
-1. Start: `python3 team_db.py task start {task['id']}`
+1. Start: `python3 {base_dir}/team_db.py task start {task['id']}`
 2. **อัพเดต working memory ทุก 30 นาที** (บังคับ)
-3. Update progress: `python3 team_db.py task progress {task['id']} \u003cpct\u003e`
+3. Update progress: `python3 {base_dir}/team_db.py task progress {task['id']} \u003cpct\u003e`
 4. **Add learning ก่อนจบ** (บังคับ)
-5. Done: `python3 team_db.py task done {task['id']}`
+5. Done: `python3 {base_dir}/team_db.py task done {task['id']}`
 
 **⚠️ ถ้าไม่อัพเดต memory งานจะไม่ผ่าน review!**
+
+### 📢 MANDATORY: รายงานผลกลับเข้าระบบ
+
+**ใช้ `agent_reporter.py` เท่านั้น เพื่อให้ฐานข้อมูลอัปเดตจริง:**
+
+```bash
+# รายงานความคืบหน้า
+python3 {base_dir}/agent_reporter.py progress --agent {task['assignee_id']} \
+  --task {task['id']} --progress <pct> --message "สรุปความคืบหน้า"
+
+# รายงานเสร็จงาน
+python3 {base_dir}/agent_reporter.py complete --agent {task['assignee_id']} \
+  --task {task['id']} --message "สรุปผลลัพธ์"
+```
 """
 
 def log_spawn(task_id: str, agent_id: str):
@@ -166,9 +238,15 @@ def log_spawn(task_id: str, agent_id: str):
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
     
+    # Check current task status to avoid clobbering fast-completing agents
+    cursor.execute('SELECT status FROM tasks WHERE id = ?', (task_id,))
+    row = cursor.fetchone()
+    task_status = row[0] if row else None
+
     # Get old status for audit
     cursor.execute('SELECT status FROM agents WHERE id = ?', (agent_id,))
-    old_status = cursor.fetchone()[0] if cursor.fetchone() else 'unknown'
+    row = cursor.fetchone()
+    old_status = row[0] if row else 'unknown'
     
     # Log to history
     cursor.execute('''
@@ -176,157 +254,96 @@ def log_spawn(task_id: str, agent_id: str):
         VALUES (?, ?, 'assigned', 'Subagent spawned via spawn_manager')
     ''', (task_id, agent_id))
     
-    # Update agent status to active
-    cursor.execute('''
-        UPDATE agents 
-        SET status = 'active', 
-            current_task_id = ?,
-            last_heartbeat = datetime('now')
-        WHERE id = ?
-    ''', (task_id, agent_id))
-    
-    # Update task status to in_progress
-    cursor.execute('''
-        UPDATE tasks 
-        SET status = 'in_progress',
-            started_at = datetime('now'),
-            updated_at = datetime('now')
-        WHERE id = ?
-    ''', (task_id,))
+    # Update only if task is still todo (prevents overwriting fast completions)
+    if task_status == 'todo':
+        cursor.execute('''
+            UPDATE agents 
+            SET status = 'active', 
+                current_task_id = ?,
+                last_heartbeat = datetime('now', 'localtime')
+            WHERE id = ?
+        ''', (task_id, agent_id))
     
     conn.commit()
     conn.close()
     
     # Audit log
-    audit.log_status_change(agent_id, old_status, 'active', 'Task spawned and started')
+    audit.log_status_change(agent_id, old_status, 'active', 'Task spawned (waiting for explicit start)')
 
 def spawn_subagent(task: Dict, task_message: str) -> bool:
-    """Actually spawn the subagent via openclaw sessions_spawn with retry support"""
+    """Run agent via OpenClaw gateway (detached)"""
     import subprocess
-    import json
+    import time
     
     label = f"{task['assignee_id']}-{task['id']}"
     agent_id = task['assignee_id']
     task_id = task['id']
+    working_dir = task.get('working_dir', '/Users/ngs/clawd')
     
-    # Prepare payload
-    payload = {
-        'task': task_message,
-        'label': label,
-        'cleanup': 'keep',
-        'runTimeoutSeconds': 3600
-    }
-    
-    # Try spawn with retry logic
-    max_attempts = 3
-    for attempt in range(1, max_attempts + 1):
-        try:
-            print(f"    🔄 Spawn attempt {attempt}/{max_attempts}...")
-            
-            result = subprocess.run(
-                ['curl', '-s', '-X', 'POST',
-                 'http://localhost:3000/api/sessions/spawn',
-                 '-H', 'Content-Type: application/json',
-                 '-d', json.dumps(payload)],
-                capture_output=True,
+    # Embed label in message since CLI doesn't accept labels
+    spawn_request = f"""[AI-TEAM TASK]
+LABEL: {label}
+WORKING_DIR: {working_dir}
+TASK_ID: {task_id}
+AGENT_ID: {agent_id}
+
+{task_message}
+"""
+
+    try:
+        print(f"    📤 Sending task to OpenClaw agent (detached): {agent_id} ...")
+
+        log_dir = Path(__file__).parent / "logs"
+        log_dir.mkdir(exist_ok=True)
+        log_path = log_dir / f"spawn_{task_id}_{int(time.time())}.log"
+
+        with open(log_path, "w") as logf:
+            proc = subprocess.Popen(
+                ['openclaw', 'agent',
+                 '--agent', agent_id,
+                 '--message', spawn_request,
+                 '--timeout', '3600'],
+                stdout=logf,
+                stderr=logf,
                 text=True,
-                timeout=30
+                start_new_session=True
             )
-            
-            if result.returncode == 0:
-                try:
-                    response = json.loads(result.stdout)
-                    if 'childSessionKey' in response:
-                        session_key = response['childSessionKey']
-                        print(f"    ✅ Spawned successfully: {session_key[:50]}...")
-                        
-                        # Log to audit
-                        audit.log_spawn(agent_id, task_id, True, session_key)
-                        
-                        return True
-                    else:
-                        error_msg = f"Missing session key: {result.stdout[:100]}"
-                        print(f"    ⚠️  {error_msg}")
-                        
-                        if attempt < max_attempts:
-                            import time
-                            time.sleep(2 ** attempt)  # Exponential backoff
-                            continue
-                        
-                        # Add to retry queue
-                        from retry_queue import RetryQueue
-                        RetryQueue().add('spawn', payload)
-                        audit.log_spawn(agent_id, task_id, False, error=error_msg)
-                        return False
-                        
-                except json.JSONDecodeError:
-                    error_msg = f"Invalid JSON: {result.stdout[:100]}"
-                    print(f"    ⚠️  {error_msg}")
-                    
-                    if attempt < max_attempts:
-                        import time
-                        time.sleep(2 ** attempt)
-                        continue
-                    
-                    from retry_queue import RetryQueue
-                    RetryQueue().add('spawn', payload)
-                    audit.log_spawn(agent_id, task_id, False, error=error_msg)
-                    return False
-            else:
-                error_msg = result.stderr[:100]
-                print(f"    ❌ Spawn failed: {error_msg}")
-                
-                if attempt < max_attempts:
-                    import time
-                    time.sleep(2 ** attempt)
-                    continue
-                
-                # Add to retry queue
-                from retry_queue import RetryQueue
-                RetryQueue().add('spawn', payload)
-                audit.log_spawn(agent_id, task_id, False, error=error_msg)
-                return False
-                
-        except subprocess.TimeoutExpired:
-            print(f"    ⏱️  Spawn timed out on attempt {attempt}")
-            if attempt < max_attempts:
-                import time
-                time.sleep(2 ** attempt)
-                continue
-            
-            # Add to retry queue
-            from retry_queue import RetryQueue
-            RetryQueue().add('spawn', payload)
-            audit.log_spawn(agent_id, task_id, False, error="Timeout")
-            return True  # Assume it might have worked
-            
-        except Exception as e:
-            error_msg = str(e)
-            print(f"    ❌ Spawn error: {error_msg}")
-            
-            if attempt < max_attempts:
-                import time
-                time.sleep(2 ** attempt)
-                continue
-            
-            # Add to retry queue
-            from retry_queue import RetryQueue
-            RetryQueue().add('spawn', payload)
+
+        time.sleep(1)
+        if proc.poll() is not None and proc.returncode != 0:
+            error_msg = f"openclaw agent exited {proc.returncode}; see {log_path}"
+            print(f"    ❌ Failed to start agent: {error_msg}")
             audit.log_spawn(agent_id, task_id, False, error=error_msg)
             return False
-    
-    return False
+
+        print(f"    ✅ Agent run started (log: {log_path})")
+        audit.log_spawn(agent_id, task_id, True, f"pending:{label}")
+        return True
+        
+    except Exception as e:
+        error_msg = str(e)
+        print(f"    ❌ Spawn request error: {error_msg}")
+        audit.log_spawn(agent_id, task_id, False, error=error_msg)
+        return False
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='AI Team Spawn Manager (FIXED)')
+    parser.add_argument('--task', help='Spawn only a specific task ID')
+    args = parser.parse_args()
+
     print(f"🤖 AI Team Spawn Manager (FIXED) - {datetime.now()}")
     print("=" * 60)
     
     # Get active sessions to avoid duplicates
-    active_sessions = get_active_sessions()
-    print(f"Active sessions: {len(active_sessions)}")
+    active_agents = get_active_sessions()
+    print(f"Active agent sessions: {len(active_agents)}")
+    busy_agents = get_busy_agents()
+    if busy_agents:
+        print(f"Busy agents (DB): {len(busy_agents)}")
     
     # Get tasks to spawn
-    tasks = get_tasks_to_spawn()
+    tasks = get_tasks_to_spawn(args.task)
     print(f"Assigned todo tasks: {len(tasks)}")
     
     spawned = []
@@ -348,13 +365,20 @@ def main():
             skipped.append((task_id, f"invalid working_dir: {working_dir}"))
             continue
         
-        # Check 3: Already has active session?
-        if task_id in active_sessions:
-            print(f"⏭️  {task_id}: Already has active session, skipping")
-            skipped.append((task_id, "active session exists"))
+        # Check 3: Agent already has an active session?
+        if task['assignee_id'] in active_agents:
+            print(f"⏭️  {task_id}: Agent already has active session, skipping")
+            skipped.append((task_id, "agent active session exists"))
+            continue
+
+        # Check 4: Agent already marked busy in DB?
+        if task['assignee_id'] in busy_agents:
+            reason = busy_agents[task['assignee_id']]
+            print(f"⏭️  {task_id}: Agent already busy in DB ({reason}), skipping")
+            skipped.append((task_id, f"agent busy: {reason}"))
             continue
         
-        # Check 4: Spawned recently?
+        # Check 5: Spawned recently?
         if was_recently_spawned(task_id):
             print(f"⏭️  {task_id}: Spawned recently, skipping")
             skipped.append((task_id, "spawned recently"))
@@ -371,6 +395,7 @@ def main():
         
         if spawn_success:
             log_spawn(task_id, task['assignee_id'])
+            busy_agents[task['assignee_id']] = f"active:{task_id}"
             spawned.append({
                 'task_id': task_id,
                 'agent': task['agent_name'],

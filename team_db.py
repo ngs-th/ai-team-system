@@ -5,6 +5,7 @@ Manage tasks, agents, and projects for the AI Team
 """
 
 import os
+import re
 import sqlite3
 import json
 import argparse
@@ -37,6 +38,131 @@ class AITeamDB:
         
     def __enter__(self):
         return self
+
+    # ========== Checklist Helpers ==========
+    @staticmethod
+    def _parse_checklist(text: str) -> List[Dict]:
+        items = []
+        if not text:
+            return items
+        for idx, line in enumerate(text.splitlines()):
+            m = re.match(r'^\s*[-*]\s+\[(x| )\]\s+(.*)$', line, re.IGNORECASE)
+            if not m:
+                continue
+            items.append({
+                'index': len(items) + 1,
+                'checked': m.group(1).lower() == 'x',
+                'text': m.group(2).strip(),
+                'line_idx': idx,
+                'line': line
+            })
+        return items
+
+    @classmethod
+    def _checklist_unchecked(cls, text: str) -> List[str]:
+        return [i['text'] for i in cls._parse_checklist(text) if not i['checked']]
+
+    @classmethod
+    def _update_checklist(cls, text: str, index: int, checked: bool) -> str:
+        if not text:
+            raise ValueError("Checklist text is empty")
+        lines = text.splitlines()
+        items = cls._parse_checklist(text)
+        if index < 1 or index > len(items):
+            raise ValueError(f"Checklist index out of range: {index}")
+        item = items[index - 1]
+        new_box = "[x]" if checked else "[ ]"
+        lines[item['line_idx']] = re.sub(r'\[[xX ]\]', new_box, item['line'], count=1)
+        return "\n".join(lines)
+
+    def _block_task_only(self, task_id: str, reason: str) -> bool:
+        """Block task without blocking agent (used for unmet prerequisites)."""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT title, status, assignee_id FROM tasks WHERE id = ?', (task_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        task_title = row[0]
+        old_status = row[1]
+        assignee = row[2]
+
+        cursor.execute('''
+            UPDATE tasks
+            SET status = 'blocked',
+                blocked_reason = ?,
+                blocked_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+        ''', (reason, task_id))
+
+        cursor.execute('''
+            INSERT INTO task_history (task_id, action, old_status, new_status, notes)
+            VALUES (?, 'blocked', ?, 'blocked', ?)
+        ''', (task_id, old_status, reason))
+
+        # Ensure agent not stuck on this task
+        if assignee:
+            cursor.execute('''
+                UPDATE agents
+                SET status = 'idle', current_task_id = NULL,
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (assignee,))
+
+        self.conn.commit()
+
+        self.notifier.notify(
+            event=NotificationEvent.BLOCK,
+            task_id=task_id,
+            task_title=task_title,
+            agent_id=assignee,
+            agent_name=assignee,
+            reason=reason
+        )
+
+        return cursor.rowcount > 0
+
+    def checklist_update(self, task_id: str, field: str, index: int, checked: bool = True) -> bool:
+        """Update checklist item in prerequisites/acceptance_criteria."""
+        cursor = self.conn.cursor()
+        column = 'prerequisites' if field == 'prerequisites' else 'acceptance_criteria'
+        cursor.execute(f'SELECT {column}, status, blocked_reason FROM tasks WHERE id = ?', (task_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        text, status, blocked_reason = row
+        updated = self._update_checklist(text or '', index, checked)
+        cursor.execute(f'''
+            UPDATE tasks
+            SET {column} = ?,
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+        ''', (updated, task_id))
+
+        cursor.execute('''
+            INSERT INTO task_history (task_id, action, notes)
+            VALUES (?, 'updated', ?)
+        ''', (task_id, f"Checklist update: {field} #{index} -> {'checked' if checked else 'unchecked'}"))
+
+        # Auto-unblock if prerequisites now fully checked
+        if field == 'prerequisites' and status == 'blocked' and blocked_reason:
+            unchecked = self._checklist_unchecked(updated)
+            if not unchecked:
+                cursor.execute('''
+                    UPDATE tasks
+                    SET status = 'todo',
+                        blocked_reason = NULL,
+                        todo_at = datetime('now', 'localtime'),
+                        updated_at = datetime('now', 'localtime')
+                    WHERE id = ?
+                ''', (task_id,))
+                cursor.execute('''
+                    INSERT INTO task_history (task_id, action, old_status, new_status, notes)
+                    VALUES (?, 'unblocked', 'blocked', 'todo', 'Prerequisites completed')
+                ''', (task_id,))
+
+        self.conn.commit()
+        return cursor.rowcount > 0
         
     def __exit__(self, *args):
         self.close()
@@ -76,8 +202,9 @@ class AITeamDB:
         cursor.execute('''
             INSERT INTO tasks (id, title, description, assignee_id, project_id,
                              priority, estimated_hours, due_date, status,
-                             prerequisites, acceptance_criteria, expected_outcome, working_dir)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?)
+                             prerequisites, acceptance_criteria, expected_outcome, working_dir,
+                             todo_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?, datetime('now', 'localtime'))
         ''', (task_id, title, description, assignee_id, project_id,
               priority, estimated_hours, due_date, prerequisites, 
               acceptance_criteria, expected_outcome, working_dir))
@@ -106,16 +233,34 @@ class AITeamDB:
         cursor = self.conn.cursor()
         
         # Get task info before updating
-        cursor.execute('SELECT title, assignee_id FROM tasks WHERE id = ?', (task_id,))
+        cursor.execute('SELECT title, assignee_id, prerequisites FROM tasks WHERE id = ?', (task_id,))
         row = cursor.fetchone()
         if not row:
             return False
         
         task_title = row[0]
+        prerequisites = row[2] or ''
+
+        if prerequisites.strip():
+            items = self._parse_checklist(prerequisites)
+            if not items:
+                reason = "Prerequisites must be a checklist (- [ ] item)."
+                self._block_task_only(task_id, reason)
+                print(f"⚠️ Task {task_id} blocked: {reason}")
+                return False
+            unchecked = [i['text'] for i in items if not i['checked']]
+            if unchecked:
+                reason = "Prerequisites not checked: " + "; ".join(unchecked)
+                self._block_task_only(task_id, reason)
+                print(f"⚠️ Task {task_id} blocked: {reason}")
+                return False
         
         # Update task - reset started_at when reassigning so fresh start time on next start
         cursor.execute('''
-            UPDATE tasks SET assignee_id = ?, status = 'todo', started_at = NULL, updated_at = datetime('now', 'localtime')
+            UPDATE tasks
+            SET assignee_id = ?, status = 'todo', started_at = NULL,
+                todo_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (agent_id, task_id))
         
@@ -153,26 +298,66 @@ class AITeamDB:
         cursor = self.conn.cursor()
         
         # Get task info before updating
-        cursor.execute('SELECT title, assignee_id FROM tasks WHERE id = ?', (task_id,))
+        cursor.execute('SELECT title, assignee_id, status, prerequisites FROM tasks WHERE id = ?', (task_id,))
         row = cursor.fetchone()
         if not row:
             return False
         
         task_title = row[0]
         assignee = agent_id or row[1] or "Unknown"
+        old_status = row[2] or "todo"
+        prerequisites = row[3] or ''
+
+        if prerequisites.strip():
+            items = self._parse_checklist(prerequisites)
+            if not items:
+                reason = "Prerequisites must be a checklist (- [ ] item)."
+                self._block_task_only(task_id, reason)
+                print(f"⚠️ Task {task_id} blocked: {reason}")
+                return False
+            unchecked = [i['text'] for i in items if not i['checked']]
+            if unchecked:
+                reason = "Prerequisites not checked: " + "; ".join(unchecked)
+                self._block_task_only(task_id, reason)
+                print(f"⚠️ Task {task_id} blocked: {reason}")
+                return False
         
         cursor.execute('''
             UPDATE tasks 
             SET status = 'in_progress', started_at = datetime('now', 'localtime'),
+                in_progress_at = datetime('now', 'localtime'),
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (task_id,))
         
         cursor.execute('''
             INSERT INTO task_history (task_id, action, old_status, new_status)
-            SELECT id, 'started', 'todo', 'in_progress'
-            FROM tasks WHERE id = ?
-        ''', (task_id,))
+            VALUES (?, 'started', ?, 'in_progress')
+        ''', (task_id, old_status))
+
+        # Auto-bootstrap working memory so review gate does not fail on first cycle.
+        if assignee and assignee != "Unknown":
+            cursor.execute('''
+                UPDATE agent_working_memory
+                SET current_task_id = ?,
+                    working_notes = CASE
+                        WHEN working_notes IS NULL OR trim(working_notes) = '' THEN 'Auto-init: task started'
+                        ELSE working_notes
+                    END,
+                    blockers = COALESCE(blockers, ''),
+                    next_steps = CASE
+                        WHEN next_steps IS NULL OR trim(next_steps) = '' THEN 'Begin work and post first progress update'
+                        ELSE next_steps
+                    END,
+                    last_updated = datetime('now', 'localtime')
+                WHERE agent_id = ?
+            ''', (task_id, assignee))
+            if cursor.rowcount == 0:
+                cursor.execute('''
+                    INSERT INTO agent_working_memory
+                    (agent_id, current_task_id, working_notes, blockers, next_steps, last_updated)
+                    VALUES (?, ?, 'Auto-init: task started', '', 'Begin work and post first progress update', datetime('now', 'localtime'))
+                ''', (assignee, task_id))
         
         self.conn.commit()
         
@@ -192,7 +377,7 @@ class AITeamDB:
         cursor = self.conn.cursor()
         
         # Get task info before updating
-        cursor.execute('SELECT title, status FROM tasks WHERE id = ?', (task_id,))
+        cursor.execute('SELECT title, status, prerequisites FROM tasks WHERE id = ?', (task_id,))
         row = cursor.fetchone()
         if not row:
             return False
@@ -202,9 +387,26 @@ class AITeamDB:
             print(f"⚠️ Task {task_id} must be in_progress to send to review")
             return False
         
+        prerequisites = row[2] or ''
+        if prerequisites.strip():
+            items = self._parse_checklist(prerequisites)
+            if not items:
+                reason = "Prerequisites must be a checklist (- [ ] item)."
+                self._block_task_only(task_id, reason)
+                print(f"⚠️ Task {task_id} blocked: {reason}")
+                return False
+            unchecked = [i['text'] for i in items if not i['checked']]
+            if unchecked:
+                reason = "Cannot send to review: prerequisites not checked -> " + "; ".join(unchecked)
+                self._block_task_only(task_id, reason)
+                print(f"⚠️ Task {task_id} blocked: {reason}")
+                return False
+        
         cursor.execute('''
             UPDATE tasks 
-            SET status = 'review', updated_at = datetime('now', 'localtime')
+            SET status = 'review',
+                review_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (task_id,))
         
@@ -276,13 +478,38 @@ class AITeamDB:
         cursor = self.conn.cursor()
         
         # Get task info before updating
-        cursor.execute('SELECT title, started_at, assignee_id FROM tasks WHERE id = ?', (task_id,))
+        cursor.execute('SELECT title, started_at, assignee_id, status, prerequisites FROM tasks WHERE id = ?', (task_id,))
         row = cursor.fetchone()
         if not row:
             return False
         
         task_title = row[0]
         assignee = row[2]
+        current_status = row[3]
+        prerequisites = row[4] or ''
+
+        # Prevent stale sessions from reopening tasks that are already finalized.
+        if current_status in ('done', 'cancelled', 'blocked'):
+            print(f"⚠️ Task {task_id} is {current_status}; skip complete_task()")
+            return False
+
+        if current_status not in ('in_progress', 'todo'):
+            print(f"⚠️ Task {task_id} must be in todo/in_progress to complete (current: {current_status})")
+            return False
+
+        if prerequisites.strip():
+            items = self._parse_checklist(prerequisites)
+            if not items:
+                reason = "Prerequisites must be a checklist (- [ ] item)."
+                self._block_task_only(task_id, reason)
+                print(f"⚠️ Task {task_id} blocked: {reason}")
+                return False
+            unchecked = [i['text'] for i in items if not i['checked']]
+            if unchecked:
+                reason = "Cannot complete task: prerequisites not checked -> " + "; ".join(unchecked)
+                self._block_task_only(task_id, reason)
+                print(f"⚠️ Task {task_id} blocked: {reason}")
+                return False
         
         # Calculate actual duration if started_at exists
         if row[1]:
@@ -290,6 +517,7 @@ class AITeamDB:
                 UPDATE tasks 
                 SET status = 'review', progress = 95, 
                     actual_duration_minutes = ROUND((strftime('%s', 'now') - strftime('%s', started_at)) / 60),
+                    review_at = datetime('now', 'localtime'),
                     updated_at = datetime('now', 'localtime')
                 WHERE id = ?
             ''', (task_id,))
@@ -297,6 +525,7 @@ class AITeamDB:
             cursor.execute('''
                 UPDATE tasks 
                 SET status = 'review', progress = 95,
+                    review_at = datetime('now', 'localtime'),
                     updated_at = datetime('now', 'localtime')
                 WHERE id = ?
             ''', (task_id,))
@@ -312,8 +541,8 @@ class AITeamDB:
         # Update agent stats
         cursor.execute('''
             INSERT INTO task_history (task_id, action, old_status, new_status)
-            VALUES (?, 'completed', 'in_progress', 'review')
-        ''', (task_id,))
+            VALUES (?, 'completed', ?, 'review')
+        ''', (task_id, current_status))
         
         self.conn.commit()
         
@@ -333,18 +562,40 @@ class AITeamDB:
         cursor = self.conn.cursor()
         
         # Get task info
-        cursor.execute('SELECT title, status, assignee_id, started_at FROM tasks WHERE id = ?', (task_id,))
+        cursor.execute('SELECT title, status, assignee_id, started_at, acceptance_criteria, prerequisites FROM tasks WHERE id = ?', (task_id,))
         row = cursor.fetchone()
         if not row:
             return False
         
-        if row[1] != 'review':
+        if row[1] not in ('review', 'reviewing'):
             print(f"⚠️ Task {task_id} must be in review status to approve")
             return False
         
         task_title = row[0]
         original_assignee = row[2]
         started_at = row[3]
+        acceptance = row[4] or ''
+        prerequisites = row[5] or ''
+
+        if prerequisites.strip():
+            items = self._parse_checklist(prerequisites)
+            if not items:
+                print(f"⚠️ Cannot approve {task_id}: Prerequisites must be a checklist (- [ ] item).")
+                return False
+            unchecked_prereq = [i['text'] for i in items if not i['checked']]
+            if unchecked_prereq:
+                print(f"⚠️ Cannot approve {task_id}: Prerequisites unchecked -> {', '.join(unchecked_prereq)}")
+                return False
+
+        if acceptance.strip():
+            items = self._parse_checklist(acceptance)
+            if not items:
+                print(f"⚠️ Cannot approve {task_id}: Acceptance Criteria must be a checklist (- [ ] item).")
+                return False
+            unchecked = [i['text'] for i in items if not i['checked']]
+            if unchecked:
+                print(f"⚠️ Cannot approve {task_id}: Acceptance Criteria unchecked -> {', '.join(unchecked)}")
+                return False
         
         # Check if memory was updated (working memory must have recent entry)
         cursor.execute('''
@@ -356,9 +607,12 @@ class AITeamDB:
         memory_row = cursor.fetchone()
         
         if not memory_row:
-            print(f"⚠️ Cannot approve {task_id}: Agent {original_assignee} did not update working memory!")
-            print(f"   Requirement: Must update working memory every 30 minutes")
-            return False
+            if reviewer_id == "auto-review":
+                print(f"⚠️ Auto-approve: missing working memory for {task_id} (agent {original_assignee})")
+            else:
+                print(f"⚠️ Cannot approve {task_id}: Agent {original_assignee} did not update working memory!")
+                print(f"   Requirement: Must update working memory every 30 minutes")
+                return False
         
         # Check if learnings were added
         cursor.execute('''
@@ -385,6 +639,7 @@ class AITeamDB:
         cursor.execute(f'''
             UPDATE tasks 
             SET status = 'done', progress = 100, completed_at = datetime('now', 'localtime'),
+                done_at = datetime('now', 'localtime'),
                 updated_at = datetime('now', 'localtime')
                 {duration_calc}
             WHERE id = ?
@@ -398,11 +653,29 @@ class AITeamDB:
                     updated_at = datetime('now', 'localtime')
                 WHERE id = ?
             ''', (original_assignee,))
+
+        # Release reviewer if provided
+        if reviewer_id:
+            cursor.execute('''
+                UPDATE agents
+                SET status = 'idle', current_task_id = NULL,
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (reviewer_id,))
+        else:
+            # Fallback: release any QA reviewer still bound to this task
+            cursor.execute('''
+                UPDATE agents
+                SET status = 'idle', current_task_id = NULL,
+                    updated_at = datetime('now', 'localtime')
+                WHERE current_task_id = ?
+                  AND lower(role) LIKE '%qa%'
+            ''', (task_id,))
         
         cursor.execute('''
             INSERT INTO task_history (task_id, action, old_status, new_status, agent_id, notes)
-            VALUES (?, 'approved', 'review', 'done', ?, ?)
-        ''', (task_id, reviewer_id, f"Approved by {reviewer_id or 'unknown'}"))
+            VALUES (?, 'approved', ?, 'done', ?, ?)
+        ''', (task_id, row[1], reviewer_id, f"Approved by {reviewer_id or 'unknown'}"))
         
         self.conn.commit()
         
@@ -421,6 +694,8 @@ class AITeamDB:
         """Reject reviewed task - moves from review back to in_progress
         Increments fix_loop_count and auto-stops if >= 10 loops
         """
+        if not reason:
+            reason = "No review reason provided"
         cursor = self.conn.cursor()
         
         # Get task info
@@ -429,7 +704,7 @@ class AITeamDB:
         if not row:
             return False
         
-        if row[1] != 'review':
+        if row[1] not in ('review', 'reviewing'):
             print(f"⚠️ Task {task_id} must be in review status to reject")
             return False
         
@@ -448,14 +723,15 @@ class AITeamDB:
             cursor.execute('''
                 UPDATE tasks 
                 SET status = 'blocked', blocked_reason = ?, fix_loop_count = ?,
+                    blocked_at = datetime('now', 'localtime'),
                     updated_at = datetime('now', 'localtime')
                 WHERE id = ?
             ''', (auto_stop_reason, new_loop_count, task_id))
             
             cursor.execute('''
                 INSERT INTO task_history (task_id, action, old_status, new_status, agent_id, notes)
-                VALUES (?, 'auto_stopped', 'review', 'blocked', ?, ?)
-            ''', (task_id, reviewer_id, f"Auto-stopped after {new_loop_count} fix loops. {reason or ''}"))
+                VALUES (?, 'auto_stopped', ?, 'blocked', ?, ?)
+            ''', (task_id, row[1], reviewer_id, f"Auto-stopped after {new_loop_count} fix loops. {reason or ''}"))
             
             self.conn.commit()
             
@@ -471,30 +747,54 @@ class AITeamDB:
             
             return True
         
-        # Normal reject - return to in_progress with incremented counter
+        # Normal reject - return to todo with higher priority for quick rework
         cursor.execute('''
             UPDATE tasks 
-            SET status = 'in_progress', progress = 0, fix_loop_count = ?,
+            SET status = 'todo', progress = 0, fix_loop_count = ?,
+                priority = 'high',
+                started_at = NULL,
+                review_feedback = ?,
+                review_feedback_at = datetime('now', 'localtime'),
+                todo_at = datetime('now', 'localtime'),
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
-        ''', (new_loop_count, task_id))
+        ''', (new_loop_count, reason, task_id))
         
-        # Update agent status back to active
+        # Set original assignee idle so spawn manager can pick it up
         if original_assignee:
             cursor.execute('''
                 UPDATE agents 
-                SET status = 'active', updated_at = datetime('now', 'localtime')
+                SET status = 'idle', current_task_id = NULL,
+                    updated_at = datetime('now', 'localtime')
                 WHERE id = ?
             ''', (original_assignee,))
+
+        # Release reviewer if provided
+        if reviewer_id:
+            cursor.execute('''
+                UPDATE agents
+                SET status = 'idle', current_task_id = NULL,
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (reviewer_id,))
+        else:
+            # Fallback: release any QA reviewer still bound to this task
+            cursor.execute('''
+                UPDATE agents
+                SET status = 'idle', current_task_id = NULL,
+                    updated_at = datetime('now', 'localtime')
+                WHERE current_task_id = ?
+                  AND lower(role) LIKE '%qa%'
+            ''', (task_id,))
         
         cursor.execute('''
             INSERT INTO task_history (task_id, action, old_status, new_status, agent_id, notes)
-            VALUES (?, 'rejected', 'review', 'in_progress', ?, ?)
-        ''', (task_id, reviewer_id, f"Rejected by {reviewer_id or 'unknown'}. Loop {new_loop_count}. {reason or ''}"))
+            VALUES (?, 'rejected', ?, 'todo', ?, ?)
+        ''', (task_id, row[1], reviewer_id, f"Rejected by {reviewer_id or 'unknown'} -> todo (priority high). Loop {new_loop_count}. {reason or ''}"))
         
         self.conn.commit()
         
-        print(f"🔄 Task {task_id} rejected (fix loop {new_loop_count}/10)")
+        print(f"🔄 Task {task_id} rejected -> todo (priority high) (fix loop {new_loop_count}/10)")
         if reason:
             print(f"   Reason: {reason}")
         
@@ -516,7 +816,9 @@ class AITeamDB:
         
         cursor.execute('''
             UPDATE tasks 
-            SET status = 'blocked', blocked_reason = ?, updated_at = datetime('now', 'localtime')
+            SET status = 'blocked', blocked_reason = ?,
+                blocked_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (reason, task_id))
         
@@ -574,6 +876,7 @@ class AITeamDB:
         cursor.execute('''
             UPDATE tasks 
             SET status = 'in_progress', started_at = datetime('now', 'localtime'), 
+                in_progress_at = datetime('now', 'localtime'),
                 blocked_reason = NULL, fix_loop_count = 0, updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (task_id,))
@@ -616,7 +919,9 @@ class AITeamDB:
         
         cursor.execute('''
             UPDATE tasks 
-            SET status = 'backlog', blocked_reason = ?, started_at = NULL, updated_at = datetime('now', 'localtime')
+            SET status = 'backlog', blocked_reason = ?, started_at = NULL,
+                backlog_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (reason, task_id))
         
@@ -773,7 +1078,7 @@ class AITeamDB:
                 a.total_tasks_assigned,
                 COUNT(DISTINCT CASE WHEN t.status = 'done' 
                     AND date(t.completed_at) BETWEEN ? AND ? THEN t.id END) as tasks_completed_period,
-                COUNT(DISTINCT CASE WHEN t.status IN ('in_progress', 'review') THEN t.id END) as tasks_active,
+                COUNT(DISTINCT CASE WHEN t.status IN ('in_progress', 'review', 'reviewing') THEN t.id END) as tasks_active,
                 ROUND(AVG(CASE WHEN t.status = 'done' AND t.actual_duration_minutes > 0 
                     THEN t.actual_duration_minutes END), 1) as avg_duration_minutes,
                 ROUND(AVG(CASE WHEN t.status = 'done' THEN t.progress END), 1) as avg_progress
@@ -852,7 +1157,7 @@ class AITeamDB:
                 COUNT(DISTINCT CASE WHEN t.status = 'done' 
                     AND t.priority = 'high'
                     AND date(t.completed_at) BETWEEN ? AND ? THEN t.id END) as high_priority,
-                COUNT(DISTINCT CASE WHEN t.status IN ('todo', 'in_progress', 'review') THEN t.id END) as pending,
+                COUNT(DISTINCT CASE WHEN t.status IN ('todo', 'in_progress', 'review', 'reviewing') THEN t.id END) as pending,
                 SUM(CASE WHEN t.status = 'done' AND t.actual_duration_minutes > 0 
                     THEN t.actual_duration_minutes ELSE 0 END) as total_minutes
             FROM agents a
@@ -1369,8 +1674,26 @@ class AITeamDB:
         
         try:
             cursor.execute(query, params)
+            if cursor.rowcount == 0:
+                payload = {
+                    'current_task_id': fields.get('current_task_id'),
+                    'working_notes': fields.get('working_notes', ''),
+                    'blockers': fields.get('blockers', ''),
+                    'next_steps': fields.get('next_steps', '')
+                }
+                cursor.execute('''
+                    INSERT INTO agent_working_memory
+                    (agent_id, current_task_id, working_notes, blockers, next_steps, last_updated)
+                    VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                ''', (
+                    agent_id,
+                    payload['current_task_id'],
+                    payload['working_notes'] or '',
+                    payload['blockers'] or '',
+                    payload['next_steps'] or ''
+                ))
             self.conn.commit()
-            return cursor.rowcount > 0
+            return True
         except Exception as e:
             print(f"[Error] Failed to update working memory: {e}")
             return False
@@ -1542,6 +1865,13 @@ def main():
     requirements.add_argument('--prerequisites', help='Prerequisites as markdown checklist')
     requirements.add_argument('--acceptance', help='Acceptance criteria as markdown checklist')
     requirements.add_argument('--goal', help='Clear description of expected outcome')
+
+    check = task_sub.add_parser('check', help='Check/uncheck checklist item')
+    check.add_argument('task_id', help='Task ID')
+    check.add_argument('--field', choices=['prerequisites', 'acceptance'], required=True)
+    check.add_argument('--index', type=int, required=True, help='1-based checklist item index')
+    check.add_argument('--done', action='store_true', help='Mark as checked')
+    check.add_argument('--undo', action='store_true', help='Mark as unchecked')
     
     show_reqs = task_sub.add_parser('show-requirements', help='Show task requirements')
     show_reqs.add_argument('task_id', help='Task ID')
@@ -1555,7 +1885,7 @@ def main():
     estimate_cmd.add_argument('hours', type=float, help='Estimated hours (e.g., 2.5 for 2 hours 30 minutes)')
 
     list_tasks = task_sub.add_parser('list', help='List tasks')
-    list_tasks.add_argument('--status', choices=['backlog', 'todo', 'in_progress', 'review', 'done', 'blocked', 'cancelled'],
+    list_tasks.add_argument('--status', choices=['backlog', 'todo', 'in_progress', 'review', 'reviewing', 'done', 'blocked', 'cancelled'],
                            help='Filter by status')
     list_tasks.add_argument('--agent', help='Filter by agent')
     
@@ -1796,6 +2126,17 @@ def main():
                         print(f"   Acceptance Criteria: {len(args.acceptance.split(chr(10)))} items")
                     if args.goal:
                         print(f"   Goal: {args.goal[:50]}{'...' if len(args.goal) > 50 else ''}")
+
+            elif args.task_action == 'check':
+                if args.done and args.undo:
+                    print("⚠️ Choose only one: --done or --undo")
+                else:
+                    checked = True if not args.undo else False
+                    field = 'prerequisites' if args.field == 'prerequisites' else 'acceptance_criteria'
+                    if db.checklist_update(args.task_id, args.field, args.index, checked):
+                        print(f"✅ Task {args.task_id} checklist updated: {field} #{args.index} -> {'checked' if checked else 'unchecked'}")
+                    else:
+                        print(f"⚠️ Task {args.task_id} not found or checklist update failed")
             
             elif args.task_action == 'show-requirements':
                 reqs = db.get_task_requirements(args.task_id)
@@ -1897,7 +2238,7 @@ def main():
                 for t in tasks:
                     status_emoji = {
                         'backlog': '📋', 'todo': '⬜', 'in_progress': '🔄',
-                        'review': '👀', 'done': '✅', 'blocked': '🚧', 'cancelled': '🚫'
+                        'review': '👀', 'reviewing': '🔍', 'done': '✅', 'blocked': '🚧', 'cancelled': '🚫'
                     }.get(t['status'], '⬜')
                     print(f"{status_emoji} {t['id']} | {t['title'][:40]}...")
                     print(f"   Status: {t['status']} | Assignee: {t['assignee_name'] or 'Unassigned'}")

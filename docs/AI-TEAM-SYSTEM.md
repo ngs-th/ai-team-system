@@ -1,8 +1,8 @@
 # 🤖 AI Team System
 
-**Version:** 4.0.0  
+**Version:** 4.1.0  
 **Created:** 2026-02-01  
-**Updated:** 2026-02-03  
+**Updated:** 2026-02-04  
 **Status:** Active  
 **Based on:** Sengdao2 BMAD Agent Pattern + Multi-Agent Standby System
 
@@ -31,12 +31,13 @@
 
 เอกสารนี้เป็น **Single Source of Truth** สำหรับระบบ AI Team:
 
-- **11 Agents** พร้อมบทบาทชัดเจน
-- **Task Workflow** แบบมี Review (in_progress → review → done)
+- **15 Agents** พร้อมบทบาทชัดเจน (4 Dev, 4 Reviewer)
+- **Task Workflow** แบบมี Review จริง (in_progress → review → reviewing → done)
 - **Memory System** 3 layers (Context + Working Memory + Communications)
 - **Auto-assign + Auto-spawn** ทำงานอัตโนมัติ
+- **Auto-review** สั่ง Reviewer ตรวจโค้ดจริง (ไม่ auto-approve)
 - **Status Reporting** Agents รายงานสถานะกลับทุก 30 นาที
-- **Agent Sync** Auto-detect stale agents ทุก 5 นาที
+- **Agent Sync** Auto-detect stale agents ทุก 5 นาที (รีเซ็ตกลับ todo)
 - **Retry Queue** Failed operations retry อัตโนมัติ
 - **Audit Logging** บันทึกทุก event สำหรับ debugging
 - **Telegram Notifications** ทุกเหตุการณ์สำคัญ
@@ -106,32 +107,41 @@
 ```
 1. Create Task → Database (status=todo)
 2. Auto-Assign → Database (assignee_id=agent, status=todo)
-3. Spawn Manager → OpenClaw API (sessions_spawn)
-4. Agent Starts → agent_reporter.py start → Database (status=active)
+3. Spawn Manager → OpenClaw (spawn agent)
+4. Agent Starts → agent_reporter.py start → Database (status=in_progress)
 5. Agent Works → Every 30 min: agent_reporter.py heartbeat
 6. Agent Done → agent_reporter.py complete → Database (status=review)
-7. Agent Sync (cron) → Check heartbeats → Reset stale agents
-8. Retry Queue (cron) → Retry failed operations
-9. Audit Log → Log every event for debugging
+7. Review Manager → Spawn reviewer → status=reviewing
+8. Reviewer Approve/Reject → done หรือ todo (priority=high)
+9. Log Bridge (cron) → Parse logs → update progress/complete
+10. Agent Sync (cron) → Reset stale agents
+11. Retry Queue (cron) → Retry failed operations
+12. Audit Log → Log every event for debugging
 ```
 
 ---
 
 ## 3. Agent Roster
 
-| # | Agent | ชื่อ | บทบาท | Model | Status |
-|---|-------|------|-------|-------|--------|
-| 1 | **Orchestrator** | Master | ประสานงานหลัก | kimi-for-coding | Standby |
-| 2 | **PM** | John | Product Manager | Claude Opus | Standby |
-| 3 | **Analyst** | Mary | Business Analyst | Claude Sonnet | Standby |
-| 4 | **Architect** | Winston | System Architect | Claude Opus | Standby |
-| 5 | **Dev** | Amelia | Developer | Kimi Code | Standby |
-| 6 | **UX Designer** | Sally | UX/UI Designer | Claude Sonnet | Standby |
-| 7 | **Scrum Master** | Bob | Scrum Master | Claude Sonnet | Standby |
-| 8 | **QA Engineer** | Quinn | QA | Claude Sonnet | Standby |
-| 9 | **Tech Writer** | Tom | Technical Writer | Claude Sonnet | Standby |
-| 10 | **Solo Dev** | Barry | Quick Flow Dev | Kimi Code | Standby |
-| 11 | **Planning** | (N/A) | Planning Agent | Claude Sonnet | Standby |
+> รายชื่อด้านล่างคือ **agents ในระบบจริง** (team.db + OpenClaw)
+
+| # | Agent ID | ชื่อ | บทบาท | Model |
+|---|---------|------|-------|-------|
+| 1 | **pm** | John | Product Manager | kimi-coding/k2p5 |
+| 2 | **analyst** | Mary | Business Analyst | kimi-coding/k2p5 |
+| 3 | **architect** | Winston | System Architect | kimi-coding/k2p5 |
+| 4 | **dev** | Amelia | Developer | kimi-coding/k2p5 |
+| 5 | **dev-2** | Dev-2 | Developer | kimi-coding/k2p5 |
+| 6 | **dev-3** | Dev-3 | Developer | kimi-coding/k2p5 |
+| 7 | **dev-4** | Dev-4 | Developer | kimi-coding/k2p5 |
+| 8 | **ux-designer** | Sally | UX/UI Designer | kimi-coding/k2p5 |
+| 9 | **scrum-master** | Bob | Scrum Master | kimi-coding/k2p5 |
+| 10 | **qa** | Quinn | QA Engineer (Reviewer) | kimi-coding/k2p5 |
+| 11 | **qa-2** | QA-2 | QA Engineer (Reviewer) | kimi-coding/k2p5 |
+| 12 | **qa-3** | QA-3 | QA Engineer (Reviewer) | kimi-coding/k2p5 |
+| 13 | **qa-4** | QA-4 | QA Engineer (Reviewer) | kimi-coding/k2p5 |
+| 14 | **tech-writer** | Tom | Technical Writer | kimi-coding/k2p5 |
+| 15 | **solo-dev** | Barry | Solo Developer | kimi-coding/k2p5 |
 
 **Session Keys:** ดูใน `STANDBY_AGENTS.md`
 
@@ -142,10 +152,13 @@
 ### 4.1 Status Flow
 
 ```
-todo → in_progress → review → done
-  ↓        ↓           ↓
-backlog  blocked    (QA verify)
+backlog → todo → in_progress → review → reviewing → done
+
+blocked = attribute (แถบแดง) ใช้ได้กับทุกสถานะ และถูกดึงขึ้นบนสุดของคอลัมน์
 ```
+
+**Dashboard Columns:** Backlog / Todo / Doing / Waiting for Review / Reviewing / Done  
+`Waiting for Review` = สถานะ `review` ที่ยังไม่มี reviewer ทำงาน
 
 **Workflow ละเอียด:**
 
@@ -155,16 +168,28 @@ backlog  blocked    (QA verify)
 | **todo** | พร้อมเริ่ม รอ assign | Auto-assign ทุก 10 นาที |
 | **in_progress** | กำลังทำ | Spawn auto → status=in_progress |
 | **blocked** | ติดปัญหา | `task block <id> "reason"` |
-| **review** | รอ QA ตรวจสอบ | `task done <id>` (auto → review) |
-| **done** | เสร็จสมบูรณ์ | `task approve <id> --reviewer qa` |
+| **review** | รอเริ่มตรวจ | `task done <id>` (auto → review) |
+| **reviewing** | กำลังตรวจงานจริง | `review_manager.py` เริ่ม reviewer |
+| **done** | เสร็จสมบูรณ์ | `task approve <id> --reviewer <qa>` |
+
+**หมายเหตุ:** คอลัมน์ `Waiting for Review` ในแดชบอร์ดคือสถานะ `review` ที่ยังไม่มี reviewer ทำงานอยู่  
+(`Reviewing` = สถานะจริงใน DB)
+
+**Reject Flow:** เมื่อรีวิวไม่ผ่าน → กลับ `todo` + `priority=high` + เก็บ `review_feedback` เพื่อให้ผู้แก้เห็นเหตุผลทันที
 
 ### 4.2 Task Completion Flow
 
 1. **Spawn Manager** detects todo task with assignee → Spawns subagent
-2. **Agent** starts work → `agent_reporter.py start` → Database updated
-3. **Agent** works → `agent_reporter.py heartbeat` every 30 min
-4. **Agent** completes → `agent_reporter.py complete` → Status=review
-5. **QA** reviews → `task approve` → Status=done
+2. **Agent** เริ่มงาน → `agent_reporter.py start`
+   - ตรวจ **Prerequisites checklist** ถ้าไม่ครบ → **blocked**
+3. **Agent** ทำงาน → `agent_reporter.py heartbeat` ทุก 30 นาที
+4. **Agent** เสร็จ → `agent_reporter.py complete` → Status=review
+   - ถ้า **Prerequisites checklist** ยังไม่ครบ → **blocked** (ห้ามเข้า review)
+5. **Review Manager** สั่ง reviewer ตรวจจริง → Status=reviewing
+   - ตรวจ **Prerequisites checklist** ซ้ำก่อนเริ่มรีวิว ถ้าไม่ครบ → ย้ายกลับ `todo`
+6. **Reviewer** ต้องเช็ค **Acceptance Criteria checklist** ครบทุกข้อ
+7. **Approve** → Status=done  
+   **Reject** → Status=todo + priority=high + review feedback
 
 ### 4.3 Required Fields (MANDATORY)
 
@@ -179,6 +204,16 @@ python3 team_db.py task create "Title" \
 - [ ] Criteria 2"
 ```
 
+**บังคับใช้ Checklist จริง:**
+- **Prerequisites** ต้องเป็น checklist และต้องถูกติ๊กครบก่อนเริ่มงาน  
+- **Acceptance Criteria** ต้องเป็น checklist และต้องถูกติ๊กครบก่อนอนุมัติ
+
+เช็คทีละข้อ:
+```bash
+python3 team_db.py task check <task_id> --field prerequisites --index <n> --done
+python3 team_db.py task check <task_id> --field acceptance --index <n> --done
+```
+
 ---
 
 ## 5. Database System (team.db)
@@ -191,12 +226,14 @@ CREATE TABLE tasks (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT,
-    project_id TEXT NOT NULL,
+    project_id TEXT,
     assignee_id TEXT,
-    status TEXT DEFAULT 'todo' CHECK (status IN ('backlog', 'todo', 'in_progress', 'review', 'done', 'blocked', 'cancelled')),
+    status TEXT DEFAULT 'todo' CHECK (status IN ('backlog', 'todo', 'in_progress', 'review', 'reviewing', 'done', 'blocked', 'cancelled')),
     blocked_reason TEXT,
     priority TEXT DEFAULT 'normal',
     progress INTEGER DEFAULT 0,
+    review_feedback TEXT,
+    review_feedback_at DATETIME,
     actual_duration_minutes INTEGER,
     fix_loop_count INTEGER DEFAULT 0,
     prerequisites TEXT NOT NULL,        -- MANDATORY
@@ -206,7 +243,14 @@ CREATE TABLE tasks (
     created_at DATETIME,
     started_at DATETIME,
     completed_at DATETIME,
-    updated_at DATETIME
+    updated_at DATETIME,
+    backlog_at DATETIME,
+    todo_at DATETIME,
+    in_progress_at DATETIME,
+    review_at DATETIME,
+    reviewing_at DATETIME,
+    done_at DATETIME,
+    blocked_at DATETIME
 );
 
 -- Agents
@@ -333,6 +377,9 @@ Agents MUST report their status back to the main system using `agent_reporter.py
 | `complete` | When agent finishes task | status=idle, task=review |
 | `status` | General status update | Updates agent status |
 
+**หมายเหตุสำคัญ:** `agent_reporter.py start` จะตรวจ **Prerequisites checklist**  
+ถ้าไม่ครบ ระบบจะบล็อกงานทันทีและคืน agent เป็น `idle`
+
 ### 7.2 Usage
 
 ```bash
@@ -340,6 +387,9 @@ Agents MUST report their status back to the main system using `agent_reporter.py
 python3 agent_reporter.py start \
   --agent pm \
   --task T-20260202-001
+
+# (Required) mark prerequisites checklist before start
+python3 team_db.py task check T-20260202-001 --field prerequisites --index 1 --done
 
 # Send heartbeat (every 30 minutes MANDATORY)
 python3 agent_reporter.py heartbeat --agent pm
@@ -361,9 +411,9 @@ python3 agent_reporter.py complete \
 ### 7.3 Stale Agent Detection
 
 **Agent Sync** (cron every 5 minutes) automatically:
-1. Finds agents with no heartbeat > 30 minutes
-2. Resets them to `idle` status
-3. Blocks their current task with reason "Agent timeout"
+1. ตรวจ session จริงจาก OpenClaw (ภายใน ~20 นาทีล่าสุด)
+2. รีเซ็ต agent ที่ไม่ active → `idle`
+3. ถ้ามีงานค้างใน `in_progress` → ย้ายกลับ `todo` (ไม่ block)
 4. Logs to audit_log
 
 ---
@@ -372,11 +422,18 @@ python3 agent_reporter.py complete \
 
 | Job | Schedule | Purpose | Status |
 |-----|----------|---------|--------|
-| **AI Team Spawn Agents** | ทุก 5 นาที | Spawn subagents for todo tasks | ✅ Active |
-| **AI Team Health Monitor** | ทุก 5 นาที | Check agent health, long-running sessions | ✅ Active |
+| **AI Team Spawn** | ทุก 5 นาที | Spawn subagents for todo tasks | ✅ Active |
 | **AI Team Agent Sync** | ทุก 5 นาที | Detect and reset stale agents | ✅ Active |
+| **AI Team Log Bridge** | ทุก 2 นาที | Parse logs → update progress/complete | ✅ Active |
+| **AI Team Auto-Assign** | ทุก 10 นาที | Assign idle agents to todo | ✅ Active |
+| **AI Team Auto-Review** | ทุก 5 นาที | Spawn reviewer + manage review queue | ✅ Active |
 | **AI Team Retry Queue** | ทุก 10 นาที | Retry failed operations | ✅ Active |
-| **AI Team Comm Bridge** | ทุก 5 นาที | Forward agent messages to Telegram | ✅ Active |
+
+**Auto-Review Behavior:**
+- ไม่ auto-approve
+- เลือก reviewer จาก pool (`qa`, `qa-2`, `qa-3`, `qa-4` หรือกำหนดด้วย `AI_TEAM_REVIEWERS`)
+- ตรวจ `prerequisites` ก่อนรีวิว: ถ้ายังมี `[ ]` จะไม่เริ่มรีวิว และย้ายกลับ `todo`
+- เปลี่ยน `review` → `reviewing` และสั่ง reviewer ตรวจจริง
 
 ### 8.1 Spawn Manager Flow
 
@@ -388,7 +445,7 @@ Get todo tasks with assignee
 Check for each task:
   - Has working_dir?
   - working_dir exists?
-  - Not already spawned?
+  - Agent not busy (DB/session)
   - Not spawned recently (>10 min)?
     ↓
 Spawn subagent via OpenClaw API
@@ -399,7 +456,7 @@ Spawn subagent via OpenClaw API
 Update database:
   - agent.status = active
   - agent.current_task_id = task
-  - task.status = in_progress
+  - task.status คงเป็น `todo` จนกว่า agent จะสั่ง `task start` / `agent_reporter.py start`
 ```
 
 ---
@@ -497,6 +554,8 @@ python3 team_db.py agent comm read <message_id>
 | `spawn_manager_fixed.py` | Spawn subagents with retry logic |
 | `agent_reporter.py` | Agents report status back to system |
 | `agent_sync.py` | Detect and reset stale agents |
+| `log_bridge.py` | Parse agent logs → update DB progress/complete |
+| `review_manager.py` | Auto-queue reviewers + manage review status |
 | `retry_queue.py` | Retry failed operations |
 | `audit_log.py` | Centralized audit logging |
 | `dashboard.php` | Web Kanban board (read-only) |
@@ -538,12 +597,17 @@ python3 team_db.py task done <task_id>
 # Approve (moves to done)
 python3 team_db.py task approve <task_id> --reviewer qa
 
+# Check prerequisites/acceptance (1-by-1)
+python3 team_db.py task check <task_id> --field prerequisites --index <n> --done
+python3 team_db.py task check <task_id> --field acceptance --index <n> --done
+
 # Block/Unblock
 python3 team_db.py task block <task_id> "Reason"
 python3 team_db.py task unblock <task_id> --agent <agent_id>
 
 # List tasks
 python3 team_db.py task list --status in_progress
+python3 team_db.py task list --status reviewing
 python3 team_db.py task list --agent dev
 ```
 
@@ -609,6 +673,23 @@ python3 agent_comm_hub.py --send "agent_id:Message"
 
 ## 14. Recent Changes
 
+### v4.1.0 (2026-02-04) - Review + Workflow Hardening
+
+**New Features:**
+- ✅ **Reviewer Pool** (qa, qa-2, qa-3, qa-4) ตรวจโค้ดจริง
+- ✅ **Reviewing Status** (`review` → `reviewing` → `done`)
+- ✅ **Review Feedback** เก็บเหตุผลลง `review_feedback`
+- ✅ **Checklist Enforcement**
+  - Prerequisites ต้องติ๊กครบก่อน start
+  - Acceptance Criteria ต้องติ๊กครบก่อน approve
+- ✅ **Status Timestamps** (`todo_at`, `review_at`, `reviewing_at`, `done_at`, ฯลฯ)
+- ✅ **Log Bridge** อ่าน log แล้วอัปเดต progress/complete
+- ✅ **Dev Scaling** เพิ่ม dev-2/3/4
+
+**Behavior Changes:**
+- Reject → กลับ `todo` + `priority=high`
+- Agent Sync รีเซ็ตกลับ `todo` (ไม่ block)
+
 ### v4.0.0 (2026-02-03) - Major Update
 
 **New Features:**
@@ -655,7 +736,7 @@ python3 agent_comm_hub.py --send "agent_id:Message"
 
 ---
 
-**Last Updated:** 2026-02-03 09:15 AM  
+**Last Updated:** 2026-02-04 04:30 AM  
 **Maintainer:** Orchestrator Agent  
-**Version:** 4.0.0  
-**Next Review:** 2026-03-03
+**Version:** 4.1.0  
+**Next Review:** 2026-03-04

@@ -7,6 +7,7 @@ Allow subagents to report their status back to the main system
 import sqlite3
 import json
 import argparse
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def report_progress(task_id: str, progress: int, notes: str = ""):
                 WHEN notes IS NULL OR notes = '' THEN ?
                 ELSE notes || '\n' || ?
             END,
-            updated_at = datetime('now')
+            updated_at = datetime('now', 'localtime')
         WHERE id = ?
     ''', (progress, notes, notes, task_id))
     
@@ -65,13 +66,75 @@ def report_start(agent_id: str, task_id: str):
     """Report that agent has started working"""
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
+
+    # Check prerequisites checklist
+    cursor.execute('SELECT prerequisites FROM tasks WHERE id = ?', (task_id,))
+    row = cursor.fetchone()
+    prerequisites = (row[0] or '') if row else ''
+    if prerequisites.strip():
+        items = []
+        for idx, line in enumerate(prerequisites.splitlines()):
+            m = re.match(r'^\s*[-*]\s+\[(x| )\]\s+(.*)$', line, re.IGNORECASE)
+            if not m:
+                continue
+            items.append((m.group(1).lower() == 'x', m.group(2).strip()))
+        if not items:
+            reason = "Prerequisites must be a checklist (- [ ] item)."
+            cursor.execute('''
+                UPDATE tasks
+                SET status = 'blocked',
+                    blocked_reason = ?,
+                    blocked_at = datetime('now', 'localtime'),
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (reason, task_id))
+            cursor.execute('''
+                INSERT INTO task_history (task_id, agent_id, action, notes)
+                VALUES (?, ?, 'blocked', ?)
+            ''', (task_id, agent_id, reason))
+            # release agent
+            cursor.execute('''
+                UPDATE agents
+                SET status = 'idle', current_task_id = NULL,
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (agent_id,))
+            conn.commit()
+            conn.close()
+            print(f"⚠️ Task {task_id} blocked: {reason}")
+            return
+        unchecked = [text for checked, text in items if not checked]
+        if unchecked:
+            reason = "Prerequisites not checked: " + "; ".join(unchecked)
+            cursor.execute('''
+                UPDATE tasks
+                SET status = 'blocked',
+                    blocked_reason = ?,
+                    blocked_at = datetime('now', 'localtime'),
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (reason, task_id))
+            cursor.execute('''
+                INSERT INTO task_history (task_id, agent_id, action, notes)
+                VALUES (?, ?, 'blocked', ?)
+            ''', (task_id, agent_id, reason))
+            cursor.execute('''
+                UPDATE agents
+                SET status = 'idle', current_task_id = NULL,
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (agent_id,))
+            conn.commit()
+            conn.close()
+            print(f"⚠️ Task {task_id} blocked: {reason}")
+            return
     
     # Update agent
     cursor.execute('''
         UPDATE agents 
         SET status = 'active',
             current_task_id = ?,
-            last_heartbeat = datetime('now')
+            last_heartbeat = datetime('now', 'localtime')
         WHERE id = ?
     ''', (task_id, agent_id))
     
@@ -79,8 +142,9 @@ def report_start(agent_id: str, task_id: str):
     cursor.execute('''
         UPDATE tasks 
         SET status = 'in_progress',
-            started_at = datetime('now'),
-            updated_at = datetime('now')
+            started_at = datetime('now', 'localtime'),
+            in_progress_at = datetime('now', 'localtime'),
+            updated_at = datetime('now', 'localtime')
         WHERE id = ?
     ''', (task_id,))
     
@@ -89,6 +153,29 @@ def report_start(agent_id: str, task_id: str):
         INSERT INTO task_history (task_id, agent_id, action, notes)
         VALUES (?, ?, 'started', 'Agent started working on task')
     ''', (task_id, agent_id))
+
+    # Auto-bootstrap working memory to prevent immediate review-gate failure.
+    cursor.execute('''
+        UPDATE agent_working_memory
+        SET current_task_id = ?,
+            working_notes = CASE
+                WHEN working_notes IS NULL OR trim(working_notes) = '' THEN 'Auto-init: task started'
+                ELSE working_notes
+            END,
+            blockers = COALESCE(blockers, ''),
+            next_steps = CASE
+                WHEN next_steps IS NULL OR trim(next_steps) = '' THEN 'Begin work and post first progress update'
+                ELSE next_steps
+            END,
+            last_updated = datetime('now', 'localtime')
+        WHERE agent_id = ?
+    ''', (task_id, agent_id))
+    if cursor.rowcount == 0:
+        cursor.execute('''
+            INSERT INTO agent_working_memory
+            (agent_id, current_task_id, working_notes, blockers, next_steps, last_updated)
+            VALUES (?, ?, 'Auto-init: task started', '', 'Begin work and post first progress update', datetime('now', 'localtime'))
+        ''', (agent_id, task_id))
     
     conn.commit()
     conn.close()
@@ -98,6 +185,65 @@ def report_complete(agent_id: str, task_id: str, summary: str = ""):
     """Report task completion"""
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
+
+    # Prerequisites must be checked before completion/review.
+    cursor.execute('SELECT prerequisites FROM tasks WHERE id = ?', (task_id,))
+    row = cursor.fetchone()
+    prerequisites = (row[0] or '') if row else ''
+    if prerequisites.strip():
+        items = []
+        for line in prerequisites.splitlines():
+            m = re.match(r'^\s*[-*]\s+\[(x| )\]\s+(.*)$', line, re.IGNORECASE)
+            if not m:
+                continue
+            items.append((m.group(1).lower() == 'x', m.group(2).strip()))
+        if not items:
+            reason = "Prerequisites must be a checklist (- [ ] item)."
+            cursor.execute('''
+                UPDATE tasks
+                SET status = 'blocked',
+                    blocked_reason = ?,
+                    blocked_at = datetime('now', 'localtime'),
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (reason, task_id))
+            cursor.execute('''
+                UPDATE agents
+                SET status = 'idle', current_task_id = NULL, updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (agent_id,))
+            cursor.execute('''
+                INSERT INTO task_history (task_id, agent_id, action, notes)
+                VALUES (?, ?, 'blocked', ?)
+            ''', (task_id, agent_id, reason))
+            conn.commit()
+            conn.close()
+            print(f"⚠️ Task {task_id} blocked: {reason}")
+            return
+        unchecked = [text for checked, text in items if not checked]
+        if unchecked:
+            reason = "Cannot complete task: prerequisites not checked -> " + "; ".join(unchecked)
+            cursor.execute('''
+                UPDATE tasks
+                SET status = 'blocked',
+                    blocked_reason = ?,
+                    blocked_at = datetime('now', 'localtime'),
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (reason, task_id))
+            cursor.execute('''
+                UPDATE agents
+                SET status = 'idle', current_task_id = NULL, updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (agent_id,))
+            cursor.execute('''
+                INSERT INTO task_history (task_id, agent_id, action, notes)
+                VALUES (?, ?, 'blocked', ?)
+            ''', (task_id, agent_id, reason))
+            conn.commit()
+            conn.close()
+            print(f"⚠️ Task {task_id} blocked: {reason}")
+            return
     
     # Update agent
     cursor.execute('''
@@ -114,8 +260,9 @@ def report_complete(agent_id: str, task_id: str, summary: str = ""):
         UPDATE tasks 
         SET status = 'review',
             progress = 100,
-            completed_at = datetime('now'),
-            updated_at = datetime('now')
+            completed_at = datetime('now', 'localtime'),
+            review_at = datetime('now', 'localtime'),
+            updated_at = datetime('now', 'localtime')
         WHERE id = ?
     ''', (task_id,))
     
