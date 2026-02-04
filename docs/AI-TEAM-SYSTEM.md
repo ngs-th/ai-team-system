@@ -188,7 +188,8 @@ blocked = สถานะจริงใน DB และแสดงเป็น
 2. **Agent** เริ่มงาน → `agent_reporter.py start`
    - ตรวจ **Prerequisites checklist** ถ้าไม่ครบ → **rejected → todo (priority=high)**
 3. **Agent** ทำงาน → `agent_reporter.py heartbeat` ทุก 30 นาที
-4. **Agent** เสร็จ → `agent_reporter.py complete` → Status=review
+4. **Agent** เสร็จ → `agent_reporter.py complete` → Status=review  
+   - **ต้องเป็น in_progress เท่านั้น** (ห้าม complete จาก todo)
    - ถ้า **Prerequisites checklist** ยังไม่ครบ → **rejected → todo (priority=high)** (ห้ามเข้า review)
 5. **Review Manager** สั่ง reviewer ตรวจจริง → Status=reviewing
    - ตรวจ **Prerequisites checklist** ซ้ำก่อนเริ่มรีวิว ถ้าไม่ครบ → ย้ายกลับ `todo`
@@ -245,6 +246,8 @@ CREATE TABLE tasks (
     acceptance_criteria TEXT,           -- MANDATORY via app validation
     expected_outcome TEXT,              -- MANDATORY via app validation
     working_dir TEXT,                   -- MANDATORY via app validation
+    runtime TEXT,                       -- openclaw | claude_code (last spawn)
+    runtime_at DATETIME,
     created_at DATETIME,
     started_at DATETIME,
     completed_at DATETIME,

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from agent_runtime import spawn_agent
+from agent_runtime import spawn_agent, get_runtime
 
 DB_PATH = Path(__file__).parent / "team.db"
 LOG_DIR = Path(__file__).parent / "logs"
@@ -247,6 +247,18 @@ def spawn_review_agent(task: sqlite3.Row, reviewer_id: str) -> bool:
         timeout_seconds=3600,
         label=f"{reviewer_id}-{task['id']}",
     )
+    if ok:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE tasks
+            SET runtime = ?,
+                runtime_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+        ''', (get_runtime(), task["id"]))
+        conn.commit()
+        conn.close()
     return ok
 
 def reconcile_completed_tasks(verbose: bool = False) -> None:

@@ -712,6 +712,16 @@ $statConfig = [
             color: #888;
             margin-bottom: 10px;
         }
+        .kanban-card-runtime {
+            display: inline-block;
+            font-size: 0.72rem;
+            color: #e2e8f0;
+            background: rgba(99, 179, 237, 0.15);
+            border: 1px solid rgba(99, 179, 237, 0.35);
+            border-radius: 6px;
+            padding: 2px 6px;
+            margin-bottom: 10px;
+        }
         .kanban-card-footer {
             display: flex;
             justify-content: space-between;
@@ -1217,6 +1227,9 @@ $statConfig = [
                             ?>
                             <div class="kanban-card-project">📁 <?= htmlspecialchars($projectDisplay) ?></div>
                             <?php endif; ?>
+                            <?php if (!empty($task['runtime'])): ?>
+                            <div class="kanban-card-runtime">⚙️ <?= htmlspecialchars($task['runtime']) ?></div>
+                            <?php endif; ?>
                             
                             <div class="kanban-card-footer">
                                 <div class="kanban-card-meta">
@@ -1442,6 +1455,8 @@ $statConfig = [
                 <p><strong>Assignee:</strong> ${task.assignee_name || 'Unassigned'}</p>
                 <p><strong>Project:</strong> ${task.project_name || 'N/A'}</p>
                 ${task.working_dir ? `<p><strong>📁 Working Dir:</strong> <code style="background: #2d3748; padding: 2px 6px; border-radius: 4px; font-size: 0.9em;">${task.working_dir}</code></p>` : '<p><strong>📁 Working Dir:</strong> <span style="color: #f56565;">⚠️ Not set!</span></p>'}
+                ${task.runtime ? `<p><strong>⚙️ Runtime:</strong> <span>${escapeHtml(task.runtime)}</span></p>` : ''}
+                ${task.runtime_at ? `<p><strong>⏱ Runtime At:</strong> ${formatDate(task.runtime_at)}</p>` : ''}
                 ${(task.status === 'blocked' && task.blocked_reason) ? `<p><strong>🚫 Blocked Reason:</strong> <span style="color: #f56565; white-space: pre-wrap;">${escapeHtml(task.blocked_reason).replace(/\\n/g, '\n')}</span></p>` : ''}
                 ${task.review_feedback ? `<p><strong>🧪 Review Feedback:</strong> <span style="color: #fed7d7; white-space: pre-wrap;">${escapeHtml(task.review_feedback).replace(/\\n/g, '\n')}</span></p>` : ''}
                 ${task.review_feedback_at ? `<p><strong>🧪 Feedback Time:</strong> ${formatDate(task.review_feedback_at)}</p>` : ''}

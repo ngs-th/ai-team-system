@@ -19,6 +19,19 @@ from agent_runtime import get_active_sessions, get_runtime, spawn_agent
 
 audit = AuditLogger()
 
+def update_task_runtime(task_id: str, runtime: str) -> None:
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE tasks
+        SET runtime = ?,
+            runtime_at = datetime('now', 'localtime'),
+            updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+    ''', (runtime, task_id))
+    conn.commit()
+    conn.close()
+
 def get_tasks_to_spawn(task_id: Optional[str] = None) -> List[Dict]:
     """Get tasks that need spawning (assigned, todo, not being worked on)"""
     conn = sqlite3.connect(str(DB_PATH))
@@ -359,6 +372,7 @@ def main():
         spawn_success = spawn_subagent(task, task_message)
         
         if spawn_success:
+            update_task_runtime(task_id, runtime)
             log_spawn(task_id, task['assignee_id'])
             busy_agents[task['assignee_id']] = f"active:{task_id}"
             spawned.append({

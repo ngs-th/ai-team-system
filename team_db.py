@@ -547,8 +547,14 @@ class AITeamDB:
             print(f"⚠️ Task {task_id} is {current_status}; skip complete_task()")
             return False
 
-        if current_status not in ('in_progress', 'todo'):
-            print(f"⚠️ Task {task_id} must be in todo/in_progress to complete (current: {current_status})")
+        if current_status != 'in_progress':
+            print(f"⚠️ Task {task_id} must be in in_progress to complete (current: {current_status})")
+            return False
+
+        if not row[1]:
+            reason = "Cannot complete task: missing started_at (task was never started)"
+            self._reject_to_todo(task_id, reason, old_status=current_status, assignee=assignee)
+            print(f"⚠️ Task {task_id} rejected: {reason}")
             return False
 
         if prerequisites.strip():
@@ -566,27 +572,16 @@ class AITeamDB:
                 return False
         
         # Calculate actual duration if started_at exists
-        if row[1]:
-            cursor.execute('''
-                UPDATE tasks 
-                SET status = 'review', progress = 95, 
-                    blocked_reason = NULL,
-                    blocked_at = NULL,
-                    actual_duration_minutes = ROUND((strftime('%s', 'now') - strftime('%s', started_at)) / 60),
-                    review_at = datetime('now', 'localtime'),
-                    updated_at = datetime('now', 'localtime')
-                WHERE id = ?
-            ''', (task_id,))
-        else:
-            cursor.execute('''
-                UPDATE tasks 
-                SET status = 'review', progress = 95,
-                    blocked_reason = NULL,
-                    blocked_at = NULL,
-                    review_at = datetime('now', 'localtime'),
-                    updated_at = datetime('now', 'localtime')
-                WHERE id = ?
-            ''', (task_id,))
+        cursor.execute('''
+            UPDATE tasks 
+            SET status = 'review', progress = 95, 
+                blocked_reason = NULL,
+                blocked_at = NULL,
+                actual_duration_minutes = ROUND((strftime('%s', 'now') - strftime('%s', started_at)) / 60),
+                review_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+        ''', (task_id,))
         
         # Release agent (they're done, waiting for review)
         cursor.execute('''

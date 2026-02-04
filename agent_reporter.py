@@ -191,6 +191,17 @@ def report_complete(agent_id: str, task_id: str, summary: str = ""):
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
 
+    cursor.execute('SELECT status FROM tasks WHERE id = ?', (task_id,))
+    row = cursor.fetchone()
+    current_status = row[0] if row else None
+    if current_status != 'in_progress':
+        reason = f"Cannot complete task: status is {current_status} (must be in_progress)"
+        reject_to_todo(conn, task_id, agent_id, reason, old_status=current_status or 'todo')
+        conn.commit()
+        conn.close()
+        print(f"⚠️ Task {task_id} rejected: {reason}")
+        return
+
     # Prerequisites must be checked before completion/review.
     cursor.execute('SELECT prerequisites FROM tasks WHERE id = ?', (task_id,))
     row = cursor.fetchone()

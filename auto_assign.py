@@ -10,7 +10,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
-from agent_runtime import spawn_agent
+from agent_runtime import spawn_agent, get_runtime
 
 os.environ['TZ'] = 'Asia/Bangkok'
 
@@ -288,6 +288,15 @@ python3 {base_dir}/team_db.py task reject {task['id']} --reason "Prerequisite no
                 ''', (agent['id'],))
                 self.conn.commit()
             else:
+                runtime = get_runtime()
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    UPDATE tasks
+                    SET runtime = ?,
+                        runtime_at = datetime('now', 'localtime'),
+                        updated_at = datetime('now', 'localtime')
+                    WHERE id = ?
+                ''', (runtime, task['id']))
                 cursor = self.conn.cursor()
                 cursor.execute('''
                     UPDATE agents
