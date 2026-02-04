@@ -1437,7 +1437,7 @@ $statConfig = [
             // Format date helper (Bangkok +7 timezone)
             const formatDate = (dateStr) => {
                 if (!dateStr) return null;
-                const date = new Date(dateStr);
+                const date = new Date(dateStr.replace(' ', 'T'));
                 return date.toLocaleString('th-TH', {
                     timeZone: 'Asia/Bangkok',
                     year: 'numeric',
@@ -1446,6 +1446,31 @@ $statConfig = [
                     hour: '2-digit',
                     minute: '2-digit'
                 }) + ' (GMT+7)';
+            };
+
+            const parseLocalDate = (dateStr) => {
+                if (!dateStr) return null;
+                const d = new Date(dateStr.replace(' ', 'T'));
+                return isNaN(d.getTime()) ? null : d;
+            };
+
+            const formatDurationMs = (ms) => {
+                if (ms == null) return '-';
+                const minutes = Math.max(0, Math.round(ms / 60000));
+                if (minutes < 60) return `${minutes}m`;
+                const hours = Math.floor(minutes / 60);
+                const mins = minutes % 60;
+                if (hours < 24) return `${hours}h ${mins}m`;
+                const days = Math.floor(hours / 24);
+                const remHours = hours % 24;
+                return `${days}d ${remHours}h`;
+            };
+
+            const calcDuration = (fromStr, toStr) => {
+                const from = parseLocalDate(fromStr);
+                const to = parseLocalDate(toStr);
+                if (!from || !to) return null;
+                return to.getTime() - from.getTime();
             };
             
             // Build modal content
@@ -1474,6 +1499,11 @@ $statConfig = [
                     <div class="task-meta-item"><strong>🚫 Blocked At</strong><br>${task.blocked_at ? formatDate(task.blocked_at) : '-'}</div>
                     <div class="task-meta-item"><strong>📈 Progress</strong><br>${task.progress ?? 0}%</div>
                     <div class="task-meta-item"><strong>🔁 Fix Loops</strong><br>${task.fix_loop_count ?? 0}</div>
+                    <div class="task-meta-item"><strong>⏳ Waiting Time</strong><br>${formatDurationMs(calcDuration(task.created_at, task.started_at))}</div>
+                    <div class="task-meta-item"><strong>🔧 Cycle Time</strong><br>${formatDurationMs(calcDuration(task.started_at, task.review_at))}</div>
+                    <div class="task-meta-item"><strong>🕒 Wait for Test</strong><br>${formatDurationMs(calcDuration(task.review_at, task.reviewing_at))}</div>
+                    <div class="task-meta-item"><strong>🧪 Testing Time</strong><br>${formatDurationMs(calcDuration(task.reviewing_at, task.done_at))}</div>
+                    <div class="task-meta-item"><strong>🏁 Lead Time</strong><br>${formatDurationMs(calcDuration(task.created_at, task.done_at))}</div>
                 </div>
             `;
             
