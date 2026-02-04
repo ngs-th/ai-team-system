@@ -179,9 +179,9 @@ If prerequisites are a checklist, mark each item:
 ```bash
 python3 {base_dir}/team_db.py task check {task['id']} --field prerequisites --index <n> --done
 ```
-If any prerequisite is NOT met, block the task:
+If any prerequisite is NOT met, stop work and send back to todo with clear reason:
 ```bash
-python3 {base_dir}/team_db.py task block {task['id']} "Prerequisite not met: <reason>"
+python3 {base_dir}/team_db.py task reject {task['id']} --reason "Prerequisite not met: <reason>"
 ```
 
 ### ✅ Acceptance Criteria (review will require all checked)

@@ -42,6 +42,17 @@ function fetchOne($db, $sql) {
     return $result->fetchArray(SQLITE3_ASSOC) ?: [];
 }
 
+// Helper function to fetch single row with parameters
+function fetchOneParams($db, $sql, $params) {
+    if (!$db) return [];
+    $stmt = $db->prepare($sql);
+    foreach ($params as $i => $value) {
+        $stmt->bindValue($i + 1, $value);
+    }
+    $result = $stmt->execute();
+    return $result->fetchArray(SQLITE3_ASSOC) ?: [];
+}
+
 // Note: Health monitoring fields should be added via team_db.py schema migration
 // Dashboard is read-only, schema changes require write access
 
@@ -58,7 +69,7 @@ $agents = fetchAll($db, '
         a.total_tasks_assigned,
         a.last_heartbeat,
         a.health_status,
-        (SELECT COUNT(*) FROM tasks WHERE assignee_id = a.id AND status IN ("todo", "in_progress", "review")) as active_tasks,
+        (SELECT COUNT(*) FROM tasks WHERE assignee_id = a.id AND status IN ("todo", "in_progress", "review", "reviewing")) as active_tasks,
         (SELECT COUNT(*) FROM tasks WHERE assignee_id = a.id AND status = "in_progress") as in_progress_tasks,
         ROUND((strftime("%s", "now") - strftime("%s", a.last_heartbeat)) / 60.0, 1) as minutes_since_heartbeat
     FROM agents a
@@ -71,6 +82,14 @@ $activities = fetchAll($db, 'SELECT th.*, t.title as task_title, a.name as agent
     LEFT JOIN tasks t ON th.task_id = t.id 
     LEFT JOIN agents a ON th.agent_id = a.id 
     ORDER BY th.timestamp DESC LIMIT 20');
+
+// Build active task map (agent currently working)
+$activeTaskIds = [];
+foreach ($agents as $agent) {
+    if (!empty($agent['current_task_id']) && ($agent['status'] ?? '') === 'active') {
+        $activeTaskIds[$agent['current_task_id']] = $agent['name'] ?? $agent['id'];
+    }
+}
 
 // Fetch duration statistics
 $durationStats = fetchOne($db, '
@@ -112,23 +131,99 @@ function formatDurationMinutes($minutes) {
     return $mins . 'm';
 }
 
-// Group tasks by status
+// Determine active review sessions (if any agent is actively reviewing a task)
+$activeReviewing = [];
+$activeReviewers = fetchAll($db, 'SELECT current_task_id FROM agents WHERE status = "active" AND current_task_id IS NOT NULL');
+foreach ($activeReviewers as $ar) {
+    $activeReviewing[$ar['current_task_id']] = true;
+}
+
+// Infer the lane for blocked tasks using task history
+function inferBlockedLane($db, $taskId) {
+    $row = fetchOneParams($db, '
+        SELECT new_status FROM task_history 
+        WHERE task_id = ? AND new_status IS NOT NULL AND new_status != "blocked"
+        ORDER BY timestamp DESC LIMIT 1
+    ', [$taskId]);
+    if (!empty($row['new_status'])) {
+        // Blocked cards must never appear in Done lane.
+        if ($row['new_status'] === 'done' || $row['new_status'] === 'cancelled') {
+            return 'todo';
+        }
+        return $row['new_status'];
+    }
+
+    $row = fetchOneParams($db, '
+        SELECT old_status FROM task_history 
+        WHERE task_id = ? AND new_status = "blocked" AND old_status IS NOT NULL
+        ORDER BY timestamp DESC LIMIT 1
+    ', [$taskId]);
+    if (!empty($row['old_status'])) {
+        // Blocked cards must never appear in Done lane.
+        if ($row['old_status'] === 'done' || $row['old_status'] === 'cancelled') {
+            return 'todo';
+        }
+        return $row['old_status'];
+    }
+
+    return 'todo';
+}
+
+// Group tasks by status (blocked is an attribute, not a column)
 $kanbanColumns = [
-    'backlog' => ['label' => 'BACKLOG', 'tasks' => []],
-    'todo' => ['label' => 'TODO', 'tasks' => []],
-    'in_progress' => ['label' => 'IN PROGRESS', 'tasks' => []],
-    'review' => ['label' => 'REVIEW', 'tasks' => []],
-    'done' => ['label' => 'DONE', 'tasks' => []],
-    'blocked' => ['label' => 'BLOCKED', 'tasks' => []],
+    'backlog' => ['label' => 'Backlog', 'tasks' => []],
+    'todo' => ['label' => 'Todo', 'tasks' => []],
+    'doing' => ['label' => 'Doing', 'tasks' => []],
+    'waiting_review' => ['label' => 'Waiting for Review', 'tasks' => []],
+    'reviewing' => ['label' => 'Reviewing', 'tasks' => []],
+    'done' => ['label' => 'Done', 'tasks' => []],
 ];
 
 foreach ($tasks as $task) {
     $status = $task['status'] ?? 'todo';
+    $isBlocked = ($status === 'blocked');
+    $task['_blocked'] = $isBlocked;
+
+    if ($status === 'blocked') {
+        $status = inferBlockedLane($db, $task['id']);
+    }
+
+    if ($status === 'in_progress') {
+        $kanbanColumns['doing']['tasks'][] = $task;
+        continue;
+    }
+
+    if ($status === 'reviewing') {
+        $kanbanColumns['reviewing']['tasks'][] = $task;
+        continue;
+    }
+
+    if ($status === 'review') {
+        if (!empty($activeReviewing[$task['id']])) {
+            $kanbanColumns['reviewing']['tasks'][] = $task;
+        } else {
+            $kanbanColumns['waiting_review']['tasks'][] = $task;
+        }
+        continue;
+    }
+
     if (isset($kanbanColumns[$status])) {
         $kanbanColumns[$status]['tasks'][] = $task;
     } else {
         $kanbanColumns['todo']['tasks'][] = $task;
     }
+}
+
+// Sort blocked tasks to the top of each column
+foreach ($kanbanColumns as $key => $column) {
+    usort($kanbanColumns[$key]['tasks'], function ($a, $b) {
+        $aBlocked = !empty($a['_blocked']);
+        $bBlocked = !empty($b['_blocked']);
+        if ($aBlocked === $bBlocked) {
+            return 0;
+        }
+        return $aBlocked ? -1 : 1;
+    });
 }
 
 // Format timestamp
@@ -324,7 +419,7 @@ $statConfig = [
             padding: 20px;
         }
         .container {
-            max-width: 1600px;
+            max-width: 100%;
             margin: 0 auto;
         }
         h1 {
@@ -508,10 +603,10 @@ $statConfig = [
         }
         .kanban-column.backlog .kanban-column-title { color: #9f7aea; }
         .kanban-column.todo .kanban-column-title { color: #a0aec0; }
-        .kanban-column.in_progress .kanban-column-title { color: #4299e1; }
-        .kanban-column.review .kanban-column-title { color: #ed8936; }
+        .kanban-column.doing .kanban-column-title { color: #4299e1; }
+        .kanban-column.waiting_review .kanban-column-title { color: #ed8936; }
+        .kanban-column.reviewing .kanban-column-title { color: #f6ad55; }
         .kanban-column.done .kanban-column-title { color: #48bb78; }
-        .kanban-column.blocked .kanban-column-title { color: #f56565; }
 
         .kanban-cards {
             flex: 1;
@@ -520,7 +615,7 @@ $statConfig = [
             gap: 10px;
             min-height: 100px;
         }
-        .kanban-card {
+.kanban-card {
             background: rgba(255, 255, 255, 0.08);
             border-radius: 10px;
             padding: 12px;
@@ -528,6 +623,34 @@ $statConfig = [
             cursor: grab;
             transition: all 0.2s ease;
             position: relative;
+        }
+        .kanban-card.working {
+            border-color: rgba(72, 187, 120, 0.6);
+            box-shadow: 0 0 12px rgba(72, 187, 120, 0.35);
+        }
+        .kanban-card.blocked {
+            border-left: 5px solid #e53e3e;
+            background: rgba(229, 62, 62, 0.08);
+        }
+        .kanban-card .blocked-flag {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            font-size: 0.7rem;
+            background: #e53e3e;
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 6px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+        .kanban-card .blocked-reason {
+            margin-top: 10px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            background: rgba(229, 62, 62, 0.12);
+            color: #ffb3b3;
+            font-size: 0.85rem;
         }
         .kanban-card:hover {
             background: rgba(255, 255, 255, 0.12);
@@ -540,16 +663,16 @@ $statConfig = [
         }
         .kanban-card-header {
             display: flex;
-            justify-content: space-between;
+            flex-direction: column;
             align-items: flex-start;
+            gap: 6px;
             margin-bottom: 8px;
         }
         .kanban-card-title {
             font-weight: 600;
             font-size: 0.95rem;
             line-height: 1.4;
-            flex: 1;
-            margin-right: 8px;
+            width: 100%;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -560,6 +683,29 @@ $statConfig = [
             background: rgba(0, 0, 0, 0.3);
             padding: 2px 6px;
             border-radius: 4px;
+        }
+        .kanban-card-id-wrap {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .kanban-card-id-row {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .copy-btn {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #cbd5e0;
+            border-radius: 6px;
+            padding: 2px 6px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            line-height: 1;
+        }
+        .copy-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
         }
         .kanban-card-project {
             font-size: 0.8rem;
@@ -594,6 +740,23 @@ $statConfig = [
             width: 100%;
             height: 100%;
             object-fit: cover;
+        }
+        .work-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #48bb78;
+            box-shadow: 0 0 10px rgba(72, 187, 120, 0.9);
+            animation: pulse 1.2s infinite;
+            z-index: 2;
+        }
+        @keyframes pulse {
+            0% { transform: scale(0.9); opacity: 0.7; }
+            50% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(0.9); opacity: 0.7; }
         }
         .kanban-card-priority {
             width: 8px;
@@ -779,6 +942,20 @@ $statConfig = [
             margin-bottom: 20px;
             font-size: 1.2rem;
         }
+        .modal-task-title {
+            font-weight: 700;
+            line-height: 1.35;
+        }
+        .modal-task-id-row {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 6px;
+        }
+        .modal-task-id {
+            font-size: 0.82rem;
+            color: #a0aec0;
+        }
         .modal-actions {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -856,6 +1033,26 @@ $statConfig = [
         }
         .task-checklist-content li {
             margin: 5px 0;
+        }
+        .task-checklist-content li.checked {
+            color: #9ae6b4;
+            text-decoration: line-through;
+        }
+        .task-checklist-summary {
+            font-size: 0.8rem;
+            color: #a0aec0;
+            margin-bottom: 6px;
+        }
+        .task-meta-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .task-meta-item {
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 0.85rem;
         }
         .task-section-divider {
             border: none;
@@ -995,10 +1192,21 @@ $statConfig = [
                                 $assigneeInitials = substr($assigneeInitials, 0, 2);
                             }
                         ?>
-                        <div class="kanban-card">
+                        <?php $isBlocked = !empty($task['_blocked']); ?>
+                        <?php $isActiveTask = !empty($activeTaskIds[$task['id']]); ?>
+                        <div class="kanban-card<?= $isBlocked ? ' blocked' : '' ?><?= $isActiveTask ? ' working' : '' ?>">
+                            <?php if ($isBlocked): ?>
+                                <div class="blocked-flag">BLOCKED</div>
+                            <?php endif; ?>
+                            <?php if ($isActiveTask): ?>
+                                <div class="work-indicator" title="Active agent: <?= htmlspecialchars($activeTaskIds[$task['id']]) ?>"></div>
+                            <?php endif; ?>
                             <div class="kanban-card-header">
                                 <span class="kanban-card-title" title="<?= htmlspecialchars($task['title'] ?? 'Untitled') ?>"><?= htmlspecialchars($task['title'] ?? 'Untitled') ?></span>
-                                <span class="kanban-card-id">#<?= $task['id'] ?></span>
+                                <span class="kanban-card-id-row">
+                                    <span class="kanban-card-id">#<?= $task['id'] ?></span>
+                                    <button class="copy-btn" onclick="copyTaskId('<?= $task['id'] ?>', event)" title="Copy Task ID">⧉</button>
+                                </span>
                             </div>
                             <?php if (!empty($task['project_id'])): 
                                 $projectDisplay = $task['project_name'] ?? $task['project_id'];
@@ -1029,8 +1237,8 @@ $statConfig = [
                                 </div>
                             </div>
 
-                            <?php if ($status === 'blocked' && !empty($task['blocked_reason'])): ?>
-                            <div class="kanban-card-blocked-reason">
+                            <?php if ($isBlocked && !empty($task['blocked_reason'])): ?>
+                            <div class="blocked-reason">
                                 🚫 <?= htmlspecialchars($task['blocked_reason']) ?>
                             </div>
                             <?php endif; ?>
@@ -1151,26 +1359,47 @@ $statConfig = [
         const taskData = <?= json_encode($tasks) ?>;
         
         // Render markdown checklist to HTML
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text.replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
         function renderChecklist(text) {
             if (!text) return '';
-            // Convert literal \n to actual newlines, then split
-            let html = text
-                .replace(/\\n/g, '\n')
-                .split('\n')
-                .map(line => {
-                    line = line.trim();
-                    if (line.match(/- \[ \] (.*)/)) {
-                        return '<li style="margin: 8px 0; line-height: 1.5;"><input type="checkbox" disabled style="margin-right: 8px;"> ' + line.replace(/- \[ \] (.*)/, '$1') + '</li>';
-                    } else if (line.match(/- \[x\] (.*)/i)) {
-                        return '<li style="margin: 8px 0; line-height: 1.5;"><input type="checkbox" checked disabled style="margin-right: 8px;"> ' + line.replace(/- \[x\] (.*)/i, '$1') + '</li>';
-                    } else if (line.match(/- (.*)/)) {
-                        return '<li style="margin: 8px 0; line-height: 1.5;">• ' + line.replace(/- (.*)/, '$1') + '</li>';
-                    }
-                    return '';
-                })
-                .filter(line => line)
-                .join('');
-            return `<ul style="list-style: none; padding-left: 0; margin: 0;">${html}</ul>`;
+            const lines = text.replace(/\\r\\n/g, '\\n').replace(/\\n/g, '\n').split('\n');
+            const items = [];
+            lines.forEach(raw => {
+                const line = raw.trim();
+                if (!line) return;
+                let m = line.match(/^[-*]\\s+\\[(x| )\\]\\s+(.*)$/i);
+                if (m) {
+                    items.push({ checked: m[1].toLowerCase() === 'x', text: escapeHtml(m[2]) });
+                    return;
+                }
+                m = line.match(/^[-*]\\s+(.*)$/);
+                if (m) {
+                    items.push({ checked: false, text: escapeHtml(m[1]), plain: true });
+                    return;
+                }
+            });
+
+            if (items.length === 0) {
+                return `<div style="color:#a0aec0; white-space: pre-wrap;">${escapeHtml(text).replace(/\\n/g, '\n')}</div>`;
+            }
+
+            const total = items.length;
+            const checked = items.filter(i => i.checked).length;
+            const summary = `<div class="task-checklist-summary">Checked ${checked} / ${total}</div>`;
+            const html = items.map(i => {
+                const box = i.plain ? '•' : (i.checked ? '☑' : '☐');
+                const cls = i.checked ? 'checked' : '';
+                return `<li class="${cls}" style="margin: 8px 0; line-height: 1.5;">${box} ${i.text}</li>`;
+            }).join('');
+            return summary + `<ul style="list-style: none; padding-left: 0; margin: 0;">${html}</ul>`;
         }
         
         // Open modal with task details
@@ -1182,7 +1411,15 @@ $statConfig = [
             const title = document.getElementById('modalTitle');
             const body = document.getElementById('modalBody');
             
-            title.textContent = `#${task.id}: ${task.title}`;
+            const taskTitle = escapeHtml(task.title || '');
+            const taskIdLabel = escapeHtml(`#${task.id}`);
+            title.innerHTML = `
+                <div class="modal-task-title">${taskTitle}</div>
+                <div class="modal-task-id-row">
+                    <span class="modal-task-id">${taskIdLabel}</span>
+                    <button class="copy-btn" onclick="copyTaskId('${task.id}', event)" title="Copy Task ID">⧉</button>
+                </div>
+            `;
             
             // Format date helper (Bangkok +7 timezone)
             const formatDate = (dateStr) => {
@@ -1201,21 +1438,34 @@ $statConfig = [
             // Build modal content
             let content = `
                 <p><strong>Status:</strong> <span style="text-transform: uppercase; color: ${getStatusColor(task.status)}">${task.status}</span></p>
-                <p><strong>Priority:</strong> ${task.priority}</p>
+                <p><strong>Priority:</strong> ${task.priority || 'normal'}</p>
                 <p><strong>Assignee:</strong> ${task.assignee_name || 'Unassigned'}</p>
                 <p><strong>Project:</strong> ${task.project_name || 'N/A'}</p>
                 ${task.working_dir ? `<p><strong>📁 Working Dir:</strong> <code style="background: #2d3748; padding: 2px 6px; border-radius: 4px; font-size: 0.9em;">${task.working_dir}</code></p>` : '<p><strong>📁 Working Dir:</strong> <span style="color: #f56565;">⚠️ Not set!</span></p>'}
-                ${task.created_at ? `<p><strong>📅 Created:</strong> ${formatDate(task.created_at)}</p>` : ''}
-                ${task.started_at ? `<p><strong>🚀 Started:</strong> ${formatDate(task.started_at)}</p>` : '<p><strong>🚀 Started:</strong> <span style="color: #718096">Not started yet</span></p>'}
-                ${task.completed_at ? `<p><strong>✅ Completed:</strong> ${formatDate(task.completed_at)}</p>` : ''}
-                ${task.due_date ? `<p><strong>⏰ Due Date:</strong> ${task.due_date}</p>` : ''}
-                ${task.blocked_reason ? `<p><strong>🚫 Blocked Reason:</strong> <span style="color: #f56565; white-space: pre-wrap;">${task.blocked_reason.replace(/\\n/g, '\n')}</span></p>` : ''}
+                ${(task.status === 'blocked' && task.blocked_reason) ? `<p><strong>🚫 Blocked Reason:</strong> <span style="color: #f56565; white-space: pre-wrap;">${escapeHtml(task.blocked_reason).replace(/\\n/g, '\n')}</span></p>` : ''}
+                ${task.review_feedback ? `<p><strong>🧪 Review Feedback:</strong> <span style="color: #fed7d7; white-space: pre-wrap;">${escapeHtml(task.review_feedback).replace(/\\n/g, '\n')}</span></p>` : ''}
+                ${task.review_feedback_at ? `<p><strong>🧪 Feedback Time:</strong> ${formatDate(task.review_feedback_at)}</p>` : ''}
+                <div class="task-meta-grid" style="margin-top: 10px;">
+                    <div class="task-meta-item"><strong>📅 Created</strong><br>${task.created_at ? formatDate(task.created_at) : '-'}</div>
+                    <div class="task-meta-item"><strong>🚀 Started</strong><br>${task.started_at ? formatDate(task.started_at) : '-'}</div>
+                    <div class="task-meta-item"><strong>✅ Completed</strong><br>${task.completed_at ? formatDate(task.completed_at) : '-'}</div>
+                    <div class="task-meta-item"><strong>⏰ Due</strong><br>${task.due_date || '-'}</div>
+                    <div class="task-meta-item"><strong>🧭 Backlog At</strong><br>${task.backlog_at ? formatDate(task.backlog_at) : '-'}</div>
+                    <div class="task-meta-item"><strong>📝 Todo At</strong><br>${task.todo_at ? formatDate(task.todo_at) : '-'}</div>
+                    <div class="task-meta-item"><strong>🔧 In Progress At</strong><br>${task.in_progress_at ? formatDate(task.in_progress_at) : '-'}</div>
+                    <div class="task-meta-item"><strong>👀 Review At</strong><br>${task.review_at ? formatDate(task.review_at) : '-'}</div>
+                    <div class="task-meta-item"><strong>🔍 Reviewing At</strong><br>${task.reviewing_at ? formatDate(task.reviewing_at) : '-'}</div>
+                    <div class="task-meta-item"><strong>🏁 Done At</strong><br>${task.done_at ? formatDate(task.done_at) : '-'}</div>
+                    <div class="task-meta-item"><strong>🚫 Blocked At</strong><br>${task.blocked_at ? formatDate(task.blocked_at) : '-'}</div>
+                    <div class="task-meta-item"><strong>📈 Progress</strong><br>${task.progress ?? 0}%</div>
+                    <div class="task-meta-item"><strong>🔁 Fix Loops</strong><br>${task.fix_loop_count ?? 0}</div>
+                </div>
             `;
             
             // Add Expected Outcome section
             if (task.expected_outcome) {
                 // Convert literal \n to actual newlines
-                const outcome = task.expected_outcome.replace(/\\n/g, '\n');
+                const outcome = escapeHtml(task.expected_outcome).replace(/\\n/g, '\n');
                 content += `
                     <hr class="task-section-divider">
                     <div class="task-goal">
@@ -1248,7 +1498,7 @@ $statConfig = [
             // Add Description section
             if (task.description) {
                 // Convert literal \n to actual newlines for proper display
-                const desc = task.description.replace(/\\n/g, '\n');
+                const desc = escapeHtml(task.description).replace(/\\n/g, '\n');
                 content += `
                     <hr class="task-section-divider">
                     <p><strong>📝 Description:</strong></p>
@@ -1262,9 +1512,11 @@ $statConfig = [
         
         function getStatusColor(status) {
             const colors = {
+                'backlog': '#a0aec0',
                 'todo': '#718096',
                 'in_progress': '#4299e1',
                 'review': '#ed8936',
+                'reviewing': '#d69e2e',
                 'done': '#48bb78',
                 'blocked': '#f56565'
             };
@@ -1274,6 +1526,32 @@ $statConfig = [
         function closeModal(e) {
             if (e && e.target !== e.currentTarget) return;
             document.getElementById('taskModal').classList.remove('active');
+        }
+
+        function copyTaskId(taskId, e) {
+            if (e) e.stopPropagation();
+            const btn = e ? e.currentTarget : null;
+            const original = btn ? btn.textContent : null;
+            const done = () => {
+                if (btn) {
+                    btn.textContent = 'Copied';
+                    setTimeout(() => { btn.textContent = original || 'Copy'; }, 1000);
+                }
+            };
+            const fallback = () => {
+                const ta = document.createElement('textarea');
+                ta.value = taskId;
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); } catch (_) {}
+                document.body.removeChild(ta);
+                done();
+            };
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(taskId).then(done).catch(fallback);
+            } else {
+                fallback();
+            }
         }
         
         // Add click handlers to cards

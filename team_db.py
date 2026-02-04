@@ -76,7 +76,7 @@ class AITeamDB:
         return "\n".join(lines)
 
     def _block_task_only(self, task_id: str, reason: str) -> bool:
-        """Block task without blocking agent (used for unmet prerequisites)."""
+        """Block task without blocking agent (for true blocked situations)."""
         cursor = self.conn.cursor()
         cursor.execute('SELECT title, status, assignee_id FROM tasks WHERE id = ?', (task_id,))
         row = cursor.fetchone()
@@ -121,6 +121,54 @@ class AITeamDB:
         )
 
         return cursor.rowcount > 0
+
+    def _reject_to_todo(self, task_id: str, reason: str, old_status: str = None, assignee: str = None) -> bool:
+        """
+        Reject task back to todo without using blocked status.
+        Use for validation failures (e.g. unchecked prerequisites).
+        """
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT status, assignee_id FROM tasks WHERE id = ?', (task_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        prev_status = old_status or row[0] or 'todo'
+        task_assignee = assignee or row[1]
+
+        cursor.execute('''
+            UPDATE tasks
+            SET status = 'todo',
+                priority = 'high',
+                blocked_reason = NULL,
+                blocked_at = NULL,
+                started_at = NULL,
+                completed_at = NULL,
+                review_at = NULL,
+                reviewing_at = NULL,
+                done_at = NULL,
+                review_feedback = ?,
+                review_feedback_at = datetime('now', 'localtime'),
+                todo_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+        ''', (reason, task_id))
+
+        if task_assignee:
+            cursor.execute('''
+                UPDATE agents
+                SET status = 'idle',
+                    current_task_id = NULL,
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (task_assignee,))
+
+        cursor.execute('''
+            INSERT INTO task_history (task_id, action, old_status, new_status, notes)
+            VALUES (?, 'rejected', ?, 'todo', ?)
+        ''', (task_id, prev_status, reason))
+
+        self.conn.commit()
+        return True
 
     def checklist_update(self, task_id: str, field: str, index: int, checked: bool = True) -> bool:
         """Update checklist item in prerequisites/acceptance_criteria."""
@@ -245,20 +293,22 @@ class AITeamDB:
             items = self._parse_checklist(prerequisites)
             if not items:
                 reason = "Prerequisites must be a checklist (- [ ] item)."
-                self._block_task_only(task_id, reason)
-                print(f"⚠️ Task {task_id} blocked: {reason}")
+                self._reject_to_todo(task_id, reason, old_status='todo', assignee=agent_id)
+                print(f"⚠️ Task {task_id} rejected: {reason}")
                 return False
             unchecked = [i['text'] for i in items if not i['checked']]
             if unchecked:
                 reason = "Prerequisites not checked: " + "; ".join(unchecked)
-                self._block_task_only(task_id, reason)
-                print(f"⚠️ Task {task_id} blocked: {reason}")
+                self._reject_to_todo(task_id, reason, old_status='todo', assignee=agent_id)
+                print(f"⚠️ Task {task_id} rejected: {reason}")
                 return False
         
         # Update task - reset started_at when reassigning so fresh start time on next start
         cursor.execute('''
             UPDATE tasks
             SET assignee_id = ?, status = 'todo', started_at = NULL,
+                blocked_reason = NULL,
+                blocked_at = NULL,
                 todo_at = datetime('now', 'localtime'),
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
@@ -312,19 +362,21 @@ class AITeamDB:
             items = self._parse_checklist(prerequisites)
             if not items:
                 reason = "Prerequisites must be a checklist (- [ ] item)."
-                self._block_task_only(task_id, reason)
-                print(f"⚠️ Task {task_id} blocked: {reason}")
+                self._reject_to_todo(task_id, reason, old_status=old_status, assignee=assignee)
+                print(f"⚠️ Task {task_id} rejected: {reason}")
                 return False
             unchecked = [i['text'] for i in items if not i['checked']]
             if unchecked:
                 reason = "Prerequisites not checked: " + "; ".join(unchecked)
-                self._block_task_only(task_id, reason)
-                print(f"⚠️ Task {task_id} blocked: {reason}")
+                self._reject_to_todo(task_id, reason, old_status=old_status, assignee=assignee)
+                print(f"⚠️ Task {task_id} rejected: {reason}")
                 return False
         
         cursor.execute('''
             UPDATE tasks 
             SET status = 'in_progress', started_at = datetime('now', 'localtime'),
+                blocked_reason = NULL,
+                blocked_at = NULL,
                 in_progress_at = datetime('now', 'localtime'),
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
@@ -392,19 +444,21 @@ class AITeamDB:
             items = self._parse_checklist(prerequisites)
             if not items:
                 reason = "Prerequisites must be a checklist (- [ ] item)."
-                self._block_task_only(task_id, reason)
-                print(f"⚠️ Task {task_id} blocked: {reason}")
+                self._reject_to_todo(task_id, reason, old_status=old_status)
+                print(f"⚠️ Task {task_id} rejected: {reason}")
                 return False
             unchecked = [i['text'] for i in items if not i['checked']]
             if unchecked:
                 reason = "Cannot send to review: prerequisites not checked -> " + "; ".join(unchecked)
-                self._block_task_only(task_id, reason)
-                print(f"⚠️ Task {task_id} blocked: {reason}")
+                self._reject_to_todo(task_id, reason, old_status=old_status)
+                print(f"⚠️ Task {task_id} rejected: {reason}")
                 return False
         
         cursor.execute('''
             UPDATE tasks 
             SET status = 'review',
+                blocked_reason = NULL,
+                blocked_at = NULL,
                 review_at = datetime('now', 'localtime'),
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
@@ -501,14 +555,14 @@ class AITeamDB:
             items = self._parse_checklist(prerequisites)
             if not items:
                 reason = "Prerequisites must be a checklist (- [ ] item)."
-                self._block_task_only(task_id, reason)
-                print(f"⚠️ Task {task_id} blocked: {reason}")
+                self._reject_to_todo(task_id, reason, old_status=current_status, assignee=assignee)
+                print(f"⚠️ Task {task_id} rejected: {reason}")
                 return False
             unchecked = [i['text'] for i in items if not i['checked']]
             if unchecked:
                 reason = "Cannot complete task: prerequisites not checked -> " + "; ".join(unchecked)
-                self._block_task_only(task_id, reason)
-                print(f"⚠️ Task {task_id} blocked: {reason}")
+                self._reject_to_todo(task_id, reason, old_status=current_status, assignee=assignee)
+                print(f"⚠️ Task {task_id} rejected: {reason}")
                 return False
         
         # Calculate actual duration if started_at exists
@@ -516,6 +570,8 @@ class AITeamDB:
             cursor.execute('''
                 UPDATE tasks 
                 SET status = 'review', progress = 95, 
+                    blocked_reason = NULL,
+                    blocked_at = NULL,
                     actual_duration_minutes = ROUND((strftime('%s', 'now') - strftime('%s', started_at)) / 60),
                     review_at = datetime('now', 'localtime'),
                     updated_at = datetime('now', 'localtime')
@@ -525,6 +581,8 @@ class AITeamDB:
             cursor.execute('''
                 UPDATE tasks 
                 SET status = 'review', progress = 95,
+                    blocked_reason = NULL,
+                    blocked_at = NULL,
                     review_at = datetime('now', 'localtime'),
                     updated_at = datetime('now', 'localtime')
                 WHERE id = ?
@@ -640,6 +698,8 @@ class AITeamDB:
             UPDATE tasks 
             SET status = 'done', progress = 100, completed_at = datetime('now', 'localtime'),
                 done_at = datetime('now', 'localtime'),
+                blocked_reason = NULL,
+                blocked_at = NULL,
                 updated_at = datetime('now', 'localtime')
                 {duration_calc}
             WHERE id = ?
@@ -753,6 +813,8 @@ class AITeamDB:
             SET status = 'todo', progress = 0, fix_loop_count = ?,
                 priority = 'high',
                 started_at = NULL,
+                blocked_reason = NULL,
+                blocked_at = NULL,
                 review_feedback = ?,
                 review_feedback_at = datetime('now', 'localtime'),
                 todo_at = datetime('now', 'localtime'),
@@ -877,7 +939,9 @@ class AITeamDB:
             UPDATE tasks 
             SET status = 'in_progress', started_at = datetime('now', 'localtime'), 
                 in_progress_at = datetime('now', 'localtime'),
-                blocked_reason = NULL, fix_loop_count = 0, updated_at = datetime('now', 'localtime')
+                blocked_reason = NULL,
+                blocked_at = NULL,
+                fix_loop_count = 0, updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (task_id,))
         

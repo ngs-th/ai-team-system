@@ -13,6 +13,44 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "team.db"
 
+
+def reject_to_todo(conn, task_id: str, agent_id: str, reason: str, old_status: str = None):
+    """Return task to todo (high priority) for validation failures, not blocked."""
+    cursor = conn.cursor()
+    if old_status is None:
+        row = cursor.execute('SELECT status FROM tasks WHERE id = ?', (task_id,)).fetchone()
+        old_status = row[0] if row else 'todo'
+
+    cursor.execute('''
+        UPDATE tasks
+        SET status = 'todo',
+            priority = 'high',
+            blocked_reason = NULL,
+            blocked_at = NULL,
+            started_at = NULL,
+            completed_at = NULL,
+            review_at = NULL,
+            reviewing_at = NULL,
+            done_at = NULL,
+            review_feedback = ?,
+            review_feedback_at = datetime('now', 'localtime'),
+            todo_at = datetime('now', 'localtime'),
+            updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+    ''', (reason, task_id))
+
+    cursor.execute('''
+        UPDATE agents
+        SET status = 'idle', current_task_id = NULL,
+            updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+    ''', (agent_id,))
+
+    cursor.execute('''
+        INSERT INTO task_history (task_id, agent_id, action, old_status, new_status, notes)
+        VALUES (?, ?, 'rejected', ?, 'todo', ?)
+    ''', (task_id, agent_id, old_status, reason))
+
 def report_status(agent_id: str, status: str, message: str = ""):
     """Report agent status to database"""
     conn = sqlite3.connect(str(DB_PATH))
@@ -80,53 +118,18 @@ def report_start(agent_id: str, task_id: str):
             items.append((m.group(1).lower() == 'x', m.group(2).strip()))
         if not items:
             reason = "Prerequisites must be a checklist (- [ ] item)."
-            cursor.execute('''
-                UPDATE tasks
-                SET status = 'blocked',
-                    blocked_reason = ?,
-                    blocked_at = datetime('now', 'localtime'),
-                    updated_at = datetime('now', 'localtime')
-                WHERE id = ?
-            ''', (reason, task_id))
-            cursor.execute('''
-                INSERT INTO task_history (task_id, agent_id, action, notes)
-                VALUES (?, ?, 'blocked', ?)
-            ''', (task_id, agent_id, reason))
-            # release agent
-            cursor.execute('''
-                UPDATE agents
-                SET status = 'idle', current_task_id = NULL,
-                    updated_at = datetime('now', 'localtime')
-                WHERE id = ?
-            ''', (agent_id,))
+            reject_to_todo(conn, task_id, agent_id, reason, old_status='todo')
             conn.commit()
             conn.close()
-            print(f"⚠️ Task {task_id} blocked: {reason}")
+            print(f"⚠️ Task {task_id} rejected: {reason}")
             return
         unchecked = [text for checked, text in items if not checked]
         if unchecked:
             reason = "Prerequisites not checked: " + "; ".join(unchecked)
-            cursor.execute('''
-                UPDATE tasks
-                SET status = 'blocked',
-                    blocked_reason = ?,
-                    blocked_at = datetime('now', 'localtime'),
-                    updated_at = datetime('now', 'localtime')
-                WHERE id = ?
-            ''', (reason, task_id))
-            cursor.execute('''
-                INSERT INTO task_history (task_id, agent_id, action, notes)
-                VALUES (?, ?, 'blocked', ?)
-            ''', (task_id, agent_id, reason))
-            cursor.execute('''
-                UPDATE agents
-                SET status = 'idle', current_task_id = NULL,
-                    updated_at = datetime('now', 'localtime')
-                WHERE id = ?
-            ''', (agent_id,))
+            reject_to_todo(conn, task_id, agent_id, reason, old_status='todo')
             conn.commit()
             conn.close()
-            print(f"⚠️ Task {task_id} blocked: {reason}")
+            print(f"⚠️ Task {task_id} rejected: {reason}")
             return
     
     # Update agent
@@ -144,6 +147,8 @@ def report_start(agent_id: str, task_id: str):
         SET status = 'in_progress',
             started_at = datetime('now', 'localtime'),
             in_progress_at = datetime('now', 'localtime'),
+            blocked_reason = NULL,
+            blocked_at = NULL,
             updated_at = datetime('now', 'localtime')
         WHERE id = ?
     ''', (task_id,))
@@ -199,50 +204,18 @@ def report_complete(agent_id: str, task_id: str, summary: str = ""):
             items.append((m.group(1).lower() == 'x', m.group(2).strip()))
         if not items:
             reason = "Prerequisites must be a checklist (- [ ] item)."
-            cursor.execute('''
-                UPDATE tasks
-                SET status = 'blocked',
-                    blocked_reason = ?,
-                    blocked_at = datetime('now', 'localtime'),
-                    updated_at = datetime('now', 'localtime')
-                WHERE id = ?
-            ''', (reason, task_id))
-            cursor.execute('''
-                UPDATE agents
-                SET status = 'idle', current_task_id = NULL, updated_at = datetime('now', 'localtime')
-                WHERE id = ?
-            ''', (agent_id,))
-            cursor.execute('''
-                INSERT INTO task_history (task_id, agent_id, action, notes)
-                VALUES (?, ?, 'blocked', ?)
-            ''', (task_id, agent_id, reason))
+            reject_to_todo(conn, task_id, agent_id, reason, old_status='in_progress')
             conn.commit()
             conn.close()
-            print(f"⚠️ Task {task_id} blocked: {reason}")
+            print(f"⚠️ Task {task_id} rejected: {reason}")
             return
         unchecked = [text for checked, text in items if not checked]
         if unchecked:
             reason = "Cannot complete task: prerequisites not checked -> " + "; ".join(unchecked)
-            cursor.execute('''
-                UPDATE tasks
-                SET status = 'blocked',
-                    blocked_reason = ?,
-                    blocked_at = datetime('now', 'localtime'),
-                    updated_at = datetime('now', 'localtime')
-                WHERE id = ?
-            ''', (reason, task_id))
-            cursor.execute('''
-                UPDATE agents
-                SET status = 'idle', current_task_id = NULL, updated_at = datetime('now', 'localtime')
-                WHERE id = ?
-            ''', (agent_id,))
-            cursor.execute('''
-                INSERT INTO task_history (task_id, agent_id, action, notes)
-                VALUES (?, ?, 'blocked', ?)
-            ''', (task_id, agent_id, reason))
+            reject_to_todo(conn, task_id, agent_id, reason, old_status='in_progress')
             conn.commit()
             conn.close()
-            print(f"⚠️ Task {task_id} blocked: {reason}")
+            print(f"⚠️ Task {task_id} rejected: {reason}")
             return
     
     # Update agent
@@ -261,6 +234,8 @@ def report_complete(agent_id: str, task_id: str, summary: str = ""):
         SET status = 'review',
             progress = 100,
             completed_at = datetime('now', 'localtime'),
+            blocked_reason = NULL,
+            blocked_at = NULL,
             review_at = datetime('now', 'localtime'),
             updated_at = datetime('now', 'localtime')
         WHERE id = ?

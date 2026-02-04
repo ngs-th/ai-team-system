@@ -140,6 +140,24 @@ def get_reviewer_ids() -> list:
     conn.close()
     return rows or [DEFAULT_REVIEWER]
 
+def order_reviewers_for_assignment(reviewer_ids: list) -> list:
+    """
+    Prefer reviewers that have been idle longest (older heartbeat first),
+    so load is spread across qa/qa-2/qa-3/qa-4 instead of always first id.
+    """
+    if not reviewer_ids:
+        return []
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    placeholders = ",".join(["?"] * len(reviewer_ids))
+    cursor.execute(
+        f"SELECT id, COALESCE(last_heartbeat, '1970-01-01 00:00:00') FROM agents WHERE id IN ({placeholders})",
+        reviewer_ids,
+    )
+    hb = {row[0]: row[1] for row in cursor.fetchall()}
+    conn.close()
+    return sorted(reviewer_ids, key=lambda rid: (hb.get(rid, "1970-01-01 00:00:00"), rid))
+
 
 def assign_reviewer(reviewer_id: str, task_id: str) -> None:
     conn = sqlite3.connect(str(DB_PATH))
@@ -246,6 +264,7 @@ def reconcile_completed_tasks(verbose: bool = False) -> None:
         SET status = 'review',
             progress = CASE WHEN progress IS NULL OR progress < 100 THEN 100 ELSE progress END,
             blocked_reason = NULL,
+            blocked_at = NULL,
             review_at = datetime('now', 'localtime'),
             updated_at = datetime('now', 'localtime')
         WHERE status IN ('todo', 'in_progress')
@@ -269,14 +288,15 @@ def auto_reject(task_id: str, reason: str):
         UPDATE tasks
         SET status = 'todo',
             started_at = NULL,
-            blocked_reason = ?,
+            blocked_reason = NULL,
+            blocked_at = NULL,
             fix_loop_count = COALESCE(fix_loop_count, 0) + 1,
             review_feedback = ?,
             review_feedback_at = datetime('now', 'localtime'),
             todo_at = datetime('now', 'localtime'),
             updated_at = datetime('now', 'localtime')
         WHERE id = ?
-    ''', (reason, reason, task_id))
+    ''', (reason, task_id))
 
     cursor.execute('''
         INSERT INTO task_history (task_id, action, old_status, new_status, notes)
@@ -305,6 +325,7 @@ def soft_return_to_todo(task_id: str, reason: str):
         SET status = 'todo',
             started_at = NULL,
             blocked_reason = NULL,
+            blocked_at = NULL,
             review_feedback = ?,
             review_feedback_at = datetime('now', 'localtime'),
             todo_at = datetime('now', 'localtime'),
@@ -335,6 +356,8 @@ def mark_reviewing(task_id: str, note: str = "Auto-review started"):
     cursor.execute('''
         UPDATE tasks
         SET status = 'reviewing',
+            blocked_reason = NULL,
+            blocked_at = NULL,
             reviewing_at = datetime('now', 'localtime'),
             updated_at = datetime('now', 'localtime')
         WHERE id = ? AND status = 'review'
@@ -343,6 +366,25 @@ def mark_reviewing(task_id: str, note: str = "Auto-review started"):
         cursor.execute('''
             INSERT INTO task_history (task_id, action, old_status, new_status, notes)
             VALUES (?, 'updated', 'review', 'reviewing', ?)
+        ''', (task_id, note))
+    conn.commit()
+    conn.close()
+
+def mark_waiting_review(task_id: str, note: str = "No active reviewer; returned to waiting review"):
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE tasks
+        SET status = 'review',
+            blocked_reason = NULL,
+            blocked_at = NULL,
+            updated_at = datetime('now', 'localtime')
+        WHERE id = ? AND status = 'reviewing'
+    ''', (task_id,))
+    if cursor.rowcount > 0:
+        cursor.execute('''
+            INSERT INTO task_history (task_id, action, old_status, new_status, notes)
+            VALUES (?, 'updated', 'reviewing', 'review', ?)
         ''', (task_id, note))
     conn.commit()
     conn.close()
@@ -370,6 +412,7 @@ def review_tasks(dry_run: bool = False, verbose: bool = False):
         return
 
     reviewers = get_reviewer_ids()
+    assignment_order = order_reviewers_for_assignment(reviewers)
     now = datetime.now()
     for task in tasks:
         task_id = task['id']
@@ -427,7 +470,7 @@ def review_tasks(dry_run: bool = False, verbose: bool = False):
 
                 # Otherwise, pick first idle reviewer
                 if not reviewer_id:
-                    for rid in reviewers:
+                    for rid in assignment_order:
                         reviewer_state, reviewer_task, _ = reviewer_status(rid)
                         if reviewer_state == 'idle' and not reviewer_task:
                             reviewer_id = rid
@@ -439,7 +482,12 @@ def review_tasks(dry_run: bool = False, verbose: bool = False):
                     mark_reviewing(task_id)
                     if reviewer_state == 'idle':
                         assign_reviewer(reviewer_id, task_id)
-                        spawn_review_agent(task, reviewer_id)
+                        if not spawn_review_agent(task, reviewer_id):
+                            release_reviewer(reviewer_id)
+                            mark_waiting_review(task_id, "Reviewer spawn failed; returned to waiting review")
+                            if verbose:
+                                print(f"WAIT {task_id} (spawn failed for {reviewer_id})")
+                            continue
                 else:
                     if verbose:
                         print(f"WAIT {task_id} (reviewer unavailable)")
@@ -466,17 +514,20 @@ def review_tasks(dry_run: bool = False, verbose: bool = False):
 
         if assigned_reviewer and assigned_heartbeat:
             age = now - assigned_heartbeat
-            if age >= timedelta(minutes=REVIEWER_STALE_MINUTES):
+            if age < timedelta(minutes=-5) or age >= timedelta(minutes=REVIEWER_STALE_MINUTES):
                 if verbose:
                     mins = int(age.total_seconds() // 60)
-                    print(f"REVIEWING {task_id} (stale reviewer {assigned_reviewer}, {mins}m) -> release")
+                    if mins < 0:
+                        print(f"REVIEWING {task_id} (clock-skew reviewer {assigned_reviewer}, {mins}m) -> release")
+                    else:
+                        print(f"REVIEWING {task_id} (stale reviewer {assigned_reviewer}, {mins}m) -> release")
                 if not dry_run:
                     release_reviewer(assigned_reviewer)
                 assigned_reviewer = None
 
         if not assigned_reviewer:
             # assign an idle reviewer to continue
-            for rid in reviewers:
+            for rid in assignment_order:
                 state, current, _ = reviewer_status(rid)
                 if state == 'idle' and not current:
                     assigned_reviewer = rid
@@ -486,11 +537,15 @@ def review_tasks(dry_run: bool = False, verbose: bool = False):
                     if verbose:
                         print(f"REVIEWING {task_id} (reassigned -> {rid})")
                     break
+        if not assigned_reviewer:
+            if not dry_run:
+                mark_waiting_review(task_id)
+            if verbose:
+                print(f"WAIT {task_id} (no active reviewer)")
+            continue
+
         if verbose:
-            if assigned_reviewer:
-                print(f"REVIEWING {task_id} (active reviewer: {assigned_reviewer})")
-            else:
-                print(f"REVIEWING {task_id} (awaiting reviewer)")
+            print(f"REVIEWING {task_id} (active reviewer: {assigned_reviewer})")
 
 
 def main():

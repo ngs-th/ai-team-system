@@ -1,6 +1,6 @@
 # 🤖 AI Team System
 
-**Version:** 4.1.0  
+**Version:** 4.1.1  
 **Created:** 2026-02-01  
 **Updated:** 2026-02-04  
 **Status:** Active  
@@ -51,7 +51,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     AI Team System v4.0                          │
+│                     AI Team System v4.1                          │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐    │
@@ -69,14 +69,14 @@
 │                             ▼                                    │
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │                    OpenClaw Gateway                      │    │
-│  │              (sessions_spawn, sessions_send)             │    │
+│  │            (CLI: openclaw agent / sessions)              │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │                             │                                    │
 │                             ▼                                    │
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │                   Sub-Agents (Isolated)                  │    │
 │  │  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐         │    │
-│  │  │ PM   │ │Dev   │ │UX    │ │QA    │ │...   │  x11    │    │
+│  │  │ PM   │ │Dev   │ │UX    │ │QA    │ │...   │  x15    │    │
 │  │  │ John │ │Amelia│ │Sally │ │Quinn │ │      │         │    │
 │  │  └──┬───┘ └──┬───┘ └──┬───┘ └──┬───┘ └──┬───┘         │    │
 │  │     │        │        │        │        │              │    │
@@ -127,21 +127,21 @@
 
 | # | Agent ID | ชื่อ | บทบาท | Model |
 |---|---------|------|-------|-------|
-| 1 | **pm** | John | Product Manager | kimi-coding/k2p5 |
-| 2 | **analyst** | Mary | Business Analyst | kimi-coding/k2p5 |
-| 3 | **architect** | Winston | System Architect | kimi-coding/k2p5 |
-| 4 | **dev** | Amelia | Developer | kimi-coding/k2p5 |
+| 1 | **pm** | John | Product Manager | claude-opus-4-5 |
+| 2 | **analyst** | Mary | Business Analyst | claude-sonnet-4-5 |
+| 3 | **architect** | Winston | System Architect | claude-opus-4-5 |
+| 4 | **dev** | Amelia | Developer | kimi-for-coding |
 | 5 | **dev-2** | Dev-2 | Developer | kimi-coding/k2p5 |
 | 6 | **dev-3** | Dev-3 | Developer | kimi-coding/k2p5 |
 | 7 | **dev-4** | Dev-4 | Developer | kimi-coding/k2p5 |
-| 8 | **ux-designer** | Sally | UX/UI Designer | kimi-coding/k2p5 |
-| 9 | **scrum-master** | Bob | Scrum Master | kimi-coding/k2p5 |
-| 10 | **qa** | Quinn | QA Engineer (Reviewer) | kimi-coding/k2p5 |
+| 8 | **ux-designer** | Sally | UX/UI Designer | claude-sonnet-4-5 |
+| 9 | **scrum-master** | Bob | Scrum Master | claude-sonnet-4-5 |
+| 10 | **qa** | Quinn | QA Engineer (Reviewer) | claude-sonnet-4-5 |
 | 11 | **qa-2** | QA-2 | QA Engineer (Reviewer) | kimi-coding/k2p5 |
 | 12 | **qa-3** | QA-3 | QA Engineer (Reviewer) | kimi-coding/k2p5 |
 | 13 | **qa-4** | QA-4 | QA Engineer (Reviewer) | kimi-coding/k2p5 |
-| 14 | **tech-writer** | Tom | Technical Writer | kimi-coding/k2p5 |
-| 15 | **solo-dev** | Barry | Solo Developer | kimi-coding/k2p5 |
+| 14 | **tech-writer** | Tom | Technical Writer | claude-sonnet-4-5 |
+| 15 | **solo-dev** | Barry | Solo Developer | kimi-for-coding |
 
 **Session Keys:** ดูใน `STANDBY_AGENTS.md`
 
@@ -154,7 +154,7 @@
 ```
 backlog → todo → in_progress → review → reviewing → done
 
-blocked = attribute (แถบแดง) ใช้ได้กับทุกสถานะ และถูกดึงขึ้นบนสุดของคอลัมน์
+blocked = สถานะจริงใน DB และแสดงเป็น attribute (แถบแดง) บนการ์ด
 ```
 
 **Dashboard Columns:** Backlog / Todo / Doing / Waiting for Review / Reviewing / Done  
@@ -166,7 +166,7 @@ blocked = attribute (แถบแดง) ใช้ได้กับทุกส
 |--------|----------|----------------|
 | **backlog** | รอข้อมูล/ทรัพยากร | `task backlog <id> --reason "..."` |
 | **todo** | พร้อมเริ่ม รอ assign | Auto-assign ทุก 10 นาที |
-| **in_progress** | กำลังทำ | Spawn auto → status=in_progress |
+| **in_progress** | กำลังทำ | Agent ต้องสั่ง `task start` หรือ `agent_reporter.py start` |
 | **blocked** | ติดปัญหา | `task block <id> "reason"` |
 | **review** | รอเริ่มตรวจ | `task done <id>` (auto → review) |
 | **reviewing** | กำลังตรวจงานจริง | `review_manager.py` เริ่ม reviewer |
@@ -175,16 +175,21 @@ blocked = attribute (แถบแดง) ใช้ได้กับทุกส
 **หมายเหตุ:** คอลัมน์ `Waiting for Review` ในแดชบอร์ดคือสถานะ `review` ที่ยังไม่มี reviewer ทำงานอยู่  
 (`Reviewing` = สถานะจริงใน DB)
 
+**กติกาแสดง blocked ใน Dashboard (ล่าสุด):**
+- การ์ดจะติดธง blocked เฉพาะเมื่อ `status=blocked`
+- งานที่ `rejected` (เช่น prerequisites ไม่ครบ) จะกลับ `todo` และเก็บเหตุผลใน `review_feedback` ไม่ใช้ `blocked_reason`
+- การ์ด blocked จะถูกเรียงไว้บนสุดของคอลัมน์ปัจจุบัน และไม่อยู่คอลัมน์ Done
+
 **Reject Flow:** เมื่อรีวิวไม่ผ่าน → กลับ `todo` + `priority=high` + เก็บ `review_feedback` เพื่อให้ผู้แก้เห็นเหตุผลทันที
 
 ### 4.2 Task Completion Flow
 
 1. **Spawn Manager** detects todo task with assignee → Spawns subagent
 2. **Agent** เริ่มงาน → `agent_reporter.py start`
-   - ตรวจ **Prerequisites checklist** ถ้าไม่ครบ → **blocked**
+   - ตรวจ **Prerequisites checklist** ถ้าไม่ครบ → **rejected → todo (priority=high)**
 3. **Agent** ทำงาน → `agent_reporter.py heartbeat` ทุก 30 นาที
 4. **Agent** เสร็จ → `agent_reporter.py complete` → Status=review
-   - ถ้า **Prerequisites checklist** ยังไม่ครบ → **blocked** (ห้ามเข้า review)
+   - ถ้า **Prerequisites checklist** ยังไม่ครบ → **rejected → todo (priority=high)** (ห้ามเข้า review)
 5. **Review Manager** สั่ง reviewer ตรวจจริง → Status=reviewing
    - ตรวจ **Prerequisites checklist** ซ้ำก่อนเริ่มรีวิว ถ้าไม่ครบ → ย้ายกลับ `todo`
 6. **Reviewer** ต้องเช็ค **Acceptance Criteria checklist** ครบทุกข้อ
@@ -236,10 +241,10 @@ CREATE TABLE tasks (
     review_feedback_at DATETIME,
     actual_duration_minutes INTEGER,
     fix_loop_count INTEGER DEFAULT 0,
-    prerequisites TEXT NOT NULL,        -- MANDATORY
-    acceptance_criteria TEXT NOT NULL,  -- MANDATORY
-    expected_outcome TEXT NOT NULL,     -- MANDATORY
-    working_dir TEXT NOT NULL,          -- MANDATORY: Where agent must work
+    prerequisites TEXT,                 -- MANDATORY via app validation
+    acceptance_criteria TEXT,           -- MANDATORY via app validation
+    expected_outcome TEXT,              -- MANDATORY via app validation
+    working_dir TEXT,                   -- MANDATORY via app validation
     created_at DATETIME,
     started_at DATETIME,
     completed_at DATETIME,
@@ -283,7 +288,8 @@ CREATE TABLE agent_context (
 
 -- Short-term Memory (WORKING.md equivalent)
 CREATE TABLE agent_working_memory (
-    agent_id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
+    agent_id TEXT NOT NULL,          -- indexed (non-unique)
     current_task_id TEXT,
     working_notes TEXT DEFAULT '',
     blockers TEXT DEFAULT '',
@@ -378,7 +384,7 @@ Agents MUST report their status back to the main system using `agent_reporter.py
 | `status` | General status update | Updates agent status |
 
 **หมายเหตุสำคัญ:** `agent_reporter.py start` จะตรวจ **Prerequisites checklist**  
-ถ้าไม่ครบ ระบบจะบล็อกงานทันทีและคืน agent เป็น `idle`
+ถ้าไม่ครบ ระบบจะ reject งานกลับ `todo` (priority=`high`) และคืน agent เป็น `idle`
 
 ### 7.2 Usage
 
@@ -434,6 +440,7 @@ python3 agent_reporter.py complete \
 - เลือก reviewer จาก pool (`qa`, `qa-2`, `qa-3`, `qa-4` หรือกำหนดด้วย `AI_TEAM_REVIEWERS`)
 - ตรวจ `prerequisites` ก่อนรีวิว: ถ้ายังมี `[ ]` จะไม่เริ่มรีวิว และย้ายกลับ `todo`
 - เปลี่ยน `review` → `reviewing` และสั่ง reviewer ตรวจจริง
+- ถ้า reviewer ไม่มี active session จะถูก reset อัตโนมัติ และงานจะกลับ `review` (Waiting for Review) เพื่อไม่ให้ค้างใน Reviewing
 
 ### 8.1 Spawn Manager Flow
 
@@ -449,8 +456,6 @@ Check for each task:
   - Not spawned recently (>10 min)?
     ↓
 Spawn subagent via OpenClaw API
-  - Retry up to 3 times
-  - Exponential backoff
   - Log to audit_log
     ↓
 Update database:
@@ -551,7 +556,7 @@ python3 team_db.py agent comm read <message_id>
 | File | Purpose |
 |------|---------|
 | `team_db.py` | Main CLI tool for tasks, agents, notifications |
-| `spawn_manager_fixed.py` | Spawn subagents with retry logic |
+| `spawn_manager_fixed.py` | Spawn subagents และผูก agent/task โดยไม่บังคับ in_progress |
 | `agent_reporter.py` | Agents report status back to system |
 | `agent_sync.py` | Detect and reset stale agents |
 | `log_bridge.py` | Parse agent logs → update DB progress/complete |
@@ -568,6 +573,7 @@ python3 team_db.py agent comm read <message_id>
 | `agent_comm_hub.py` | Facilitate agent communication |
 | `STANDBY_AGENTS.md` | Active agent session keys |
 | `docs/IMPLEMENTATION.md` | Implementation details |
+| `docs/architecture/ERD.md` | ERD (logical data model) ของ `team.db` |
 
 ---
 
@@ -673,6 +679,23 @@ python3 agent_comm_hub.py --send "agent_id:Message"
 
 ## 14. Recent Changes
 
+### v4.1.2 (2026-02-05) - Reject/Blocked Semantics Fix
+
+**Changes:**
+- ✅ แก้ flow ให้ prerequisite validation fail = `rejected -> todo` (ไม่ติด blocked)
+- ✅ เคลียร์ `blocked_reason/blocked_at` อัตโนมัติเมื่อ task เข้า `in_progress/review/reviewing/done`
+- ✅ Dashboard ตีความ blocked จาก `status=blocked` เท่านั้น (ไม่ปนกับ review rejection)
+- ✅ Agent prompt ปรับให้ unmet prerequisites ใช้ `task reject --reason ...` แทน `task block`
+
+### v4.1.1 (2026-02-04) - Doc Sync + Workflow Gate Alignment
+
+**Changes:**
+- ✅ อัปเดตเอกสารให้ตรงโค้ดจริง (spawn, review gate, checklist gate)
+- ✅ อัปเดต Agent model roster ให้ตรง `team.db`
+- ✅ แก้ schema doc ให้ตรง DB จริง (app-level validation สำหรับ required fields)
+- ✅ ระบุชัดว่า `blocked` เป็นสถานะจริงใน DB และแสดงผลเป็นแถบแดงบนการ์ด
+- ✅ ปรับ prerequisite gate ให้ **reject กลับ todo** (ไม่ใช้ blocked สำหรับ validation error)
+
 ### v4.1.0 (2026-02-04) - Review + Workflow Hardening
 
 **New Features:**
@@ -736,7 +759,7 @@ python3 agent_comm_hub.py --send "agent_id:Message"
 
 ---
 
-**Last Updated:** 2026-02-04 04:30 AM  
+**Last Updated:** 2026-02-04 11:56 PM  
 **Maintainer:** Orchestrator Agent  
-**Version:** 4.1.0  
+**Version:** 4.1.1  
 **Next Review:** 2026-03-04

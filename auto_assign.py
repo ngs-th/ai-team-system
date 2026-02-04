@@ -18,7 +18,7 @@ TELEGRAM_CHANNEL = "1268858185"
 
 # Role matching for task assignment
 ROLE_MATCH = {
-    'dev': ['dev', 'solo-dev'],
+    'dev': ['dev', 'dev-2', 'dev-3', 'dev-4', 'solo-dev'],
     'frontend': ['dev', 'ux-designer'],
     'backend': ['dev', 'architect'],
     'database': ['architect', 'dev'],
@@ -26,13 +26,13 @@ ROLE_MATCH = {
     'ui': ['ux-designer'],
     'ux': ['ux-designer'],
     'test': ['qa'],
-    'qa': ['qa'],
+    'qa': ['qa', 'qa-2', 'qa-3', 'qa-4'],
     'doc': ['tech-writer'],
     'document': ['tech-writer'],
     'design': ['ux-designer'],
     'plan': ['pm', 'analyst'],
     'analyze': ['analyst'],
-    'review': ['qa'],
+    'review': ['qa', 'qa-2', 'qa-3', 'qa-4'],
 }
 
 class AutoAssign:
@@ -96,7 +96,8 @@ class AutoAssign:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT t.id, t.title, t.description, t.priority, t.project_id,
-                   t.prerequisites, t.acceptance_criteria, t.expected_outcome, t.working_dir
+                   t.prerequisites, t.acceptance_criteria, t.expected_outcome, t.working_dir,
+                   t.review_feedback, t.review_feedback_at
             FROM tasks t
             WHERE t.status = 'todo'
             AND (t.assignee_id IS NULL OR t.assignee_id = '')
@@ -158,7 +159,9 @@ class AutoAssign:
         try:
             cursor.execute('''
                 UPDATE tasks 
-                SET assignee_id = ?, status = 'todo', updated_at = CURRENT_TIMESTAMP
+                SET assignee_id = ?, status = 'todo',
+                    todo_at = datetime('now', 'localtime'),
+                    updated_at = datetime('now', 'localtime')
                 WHERE id = ?
             ''', (agent_id, task_id))
             
@@ -166,7 +169,7 @@ class AutoAssign:
                 UPDATE agents 
                 SET total_tasks_assigned = total_tasks_assigned + 1,
                     current_task_id = ?,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = datetime('now', 'localtime')
                 WHERE id = ?
             ''', (task_id, agent_id))
             
@@ -188,6 +191,7 @@ class AutoAssign:
             context = agent.get('context', '')
             learnings = agent.get('learnings', '')
             working_dir = task.get('working_dir', '/Users/ngs/clawd')
+            base_dir = str(Path(__file__).parent)
             
             task_message = f"""## Task Assignment
 
@@ -215,6 +219,26 @@ cd {working_dir}
 - **Priority:** {task['priority']}
 - **Expected Outcome:** {task.get('expected_outcome', 'N/A')}
 
+### 📌 Last Review Feedback (if any)
+{task.get('review_feedback') or 'N/A'}
+
+**Feedback Time:** {task.get('review_feedback_at') or 'N/A'}
+
+### ✅ Prerequisites (must check 1-by-1 BEFORE starting)
+{task.get('prerequisites') or 'N/A'}
+
+If prerequisites are a checklist, mark each item:
+```bash
+python3 {base_dir}/team_db.py task check {task['id']} --field prerequisites --index <n> --done
+```
+If any prerequisite is NOT met, stop work and send back to todo with clear reason:
+```bash
+python3 {base_dir}/team_db.py task reject {task['id']} --reason "Prerequisite not met: <reason>"
+```
+
+### ✅ Acceptance Criteria (review will require all checked)
+{task.get('acceptance_criteria') or 'N/A'}
+
 ### Prerequisites (Check before starting)
 {task.get('prerequisites', 'None specified')}
 
@@ -224,10 +248,10 @@ cd {working_dir}
 ### Instructions
 1. **cd {working_dir}** - Go to working directory FIRST
 2. Review prerequisites - ensure all are met
-3. Start task: python3 team_db.py task start {task['id']}
+3. Start task: python3 {base_dir}/team_db.py task start {task['id']}
 4. Work on the task using your expertise
 5. Update progress regularly
-6. When done: python3 team_db.py task done {task['id']}
+6. When done: python3 {base_dir}/team_db.py task done {task['id']}
 7. Document learnings in your context
 
 **Remember:** You are {agent['name']}. Use your expertise and context to complete this task effectively.
@@ -238,38 +262,44 @@ cd {working_dir}
             cursor = self.conn.cursor()
             cursor.execute('''
                 UPDATE agents 
-                SET status = 'active', last_heartbeat = CURRENT_TIMESTAMP
+                SET status = 'active', last_heartbeat = datetime('now', 'localtime')
                 WHERE id = ?
             ''', (agent['id'],))
             self.conn.commit()
             
-            # Spawn subagent via openclaw API
+            # Spawn subagent via OpenClaw gateway (detached)
             import subprocess
-            import json
-            
-            # Build payload for sessions_spawn
-            payload = {
-                'task': task_message,
-                'agent_id': agent['id'],
-                'label': f"{agent['id']}-{task['id']}",
-                'run_timeout_seconds': 3600,
-                'cleanup': 'keep'
-            }
-            
-            # Use openclaw gateway API
-            spawn_result = subprocess.run(
-                ['curl', '-s', '-X', 'POST',
-                 'http://localhost:3000/api/sessions/spawn',
-                 '-H', 'Content-Type: application/json',
-                 '-d', json.dumps(payload)],
-                capture_output=True,
-                text=True
-            )
-            
-            if spawn_result.returncode == 0 and 'sessionKey' in spawn_result.stdout:
-                print(f"  🚀 Spawned {agent['name']} for {task['id']}")
+            import time
+            label = f"{agent['id']}-{task['id']}"
+            spawn_request = f"""[AI-TEAM TASK]
+LABEL: {label}
+WORKING_DIR: {working_dir}
+TASK_ID: {task['id']}
+AGENT_ID: {agent['id']}
+
+{task_message}
+"""
+            log_dir = Path(__file__).parent / "logs"
+            log_dir.mkdir(exist_ok=True)
+            log_path = log_dir / f"auto_assign_{task['id']}_{int(time.time())}.log"
+
+            with open(log_path, "w") as logf:
+                proc = subprocess.Popen(
+                    ['openclaw', 'agent',
+                     '--agent', agent['id'],
+                     '--message', spawn_request,
+                     '--timeout', '3600'],
+                    stdout=logf,
+                    stderr=logf,
+                    text=True,
+                    start_new_session=True
+                )
+
+            time.sleep(1)
+            if proc.poll() is not None and proc.returncode != 0:
+                print(f"  ⚠️  Assigned to {agent['name']} - agent start failed (log: {log_path})")
             else:
-                print(f"  ⚠️  Assigned to {agent['name']} - spawn via API failed, manual start needed")
+                print(f"  🚀 Agent run started for {agent['name']} ({task['id']}) (log: {log_path})")
             
             return True
             
