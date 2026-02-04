@@ -2,3 +2,557 @@
 [2026-02-03T09:23:21.469688] STATUS_CHANGE | Agent: analyst | active → idle | Auto-reset due to timeout
 [2026-02-03T09:23:21.471424] TASK_UPDATE | Agent: analyst | Task: T-20260202-001 | in_progress → blocked | Agent timeout
 [2026-02-03T09:29:55.530269] AGENT_SPAWN | Agent: solo-dev | Task: TC101-001 | Success: False
+[2026-02-03T10:45:23.418757] AGENT_SPAWN | Agent: qa | Task: T-20260202-002 | Success: False
+[2026-02-03T10:46:23.670522] AGENT_SPAWN | Agent: qa | Task: T-20260202-002 | Success: False
+[2026-02-03T10:46:58.648072] AGENT_SPAWN | Agent: qa | Task: T-20260202-002 | Success: False | Error: Invalid JSON: Method Not Allowed
+[2026-02-03T10:47:04.890690] AGENT_SPAWN | Agent: qa | Task: T-20260202-003 | Success: False | Error: Invalid JSON: Method Not Allowed
+[2026-02-03T10:47:18.326618] AGENT_SPAWN | Agent: qa | Task: T-20260202-002 | Success: False | Error: Invalid JSON: Method Not Allowed
+[2026-02-03T10:49:17.842927] AGENT_SPAWN | Agent: qa | Task: T-20260202-002 | Success: True
+[2026-02-03T10:49:31.028395] AGENT_SPAWN | Agent: qa | Task: T-20260202-002 | Success: True
+[2026-02-03T10:49:31.033527] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:49:35.938039] AGENT_SPAWN | Agent: qa | Task: T-20260202-003 | Success: True
+[2026-02-03T10:49:35.946393] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:49:40.823265] AGENT_SPAWN | Agent: qa | Task: T-20260202-004 | Success: True
+[2026-02-03T10:49:40.829303] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:49:45.857127] AGENT_SPAWN | Agent: qa | Task: T-20260202-005 | Success: True
+[2026-02-03T10:49:45.861661] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:49:50.749996] AGENT_SPAWN | Agent: qa | Task: T-20260202-013 | Success: True
+[2026-02-03T10:49:50.755017] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:49:55.816014] AGENT_SPAWN | Agent: qa | Task: T-20260202-014 | Success: True
+[2026-02-03T10:49:55.824900] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:50:00.760163] AGENT_SPAWN | Agent: qa | Task: T-20260202-015 | Success: True
+[2026-02-03T10:50:00.766392] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:50:05.794261] AGENT_SPAWN | Agent: qa | Task: T-20260202-017 | Success: True
+[2026-02-03T10:50:05.800636] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:50:10.810810] AGENT_SPAWN | Agent: qa | Task: T-20260202-018 | Success: True
+[2026-02-03T10:50:10.817642] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:50:15.855825] AGENT_SPAWN | Agent: qa | Task: T-20260202-019 | Success: True
+[2026-02-03T10:50:15.863306] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:50:20.683927] AGENT_SPAWN | Agent: qa | Task: T-20260202-020 | Success: True
+[2026-02-03T10:50:20.693088] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:50:25.629836] AGENT_SPAWN | Agent: qa | Task: T-20260202-021 | Success: True
+[2026-02-03T10:50:25.633944] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:50:30.448810] AGENT_SPAWN | Agent: qa | Task: T-20260202-025 | Success: True
+[2026-02-03T10:50:30.454649] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T10:50:35.429980] AGENT_SPAWN | Agent: qa | Task: T-20260203-003 | Success: True
+[2026-02-03T10:50:35.438269] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T11:35:17.310851] AGENT_SPAWN | Agent: pm | Task: T-20260203-002 | Success: True
+[2026-02-03T11:35:17.319760] STATUS_CHANGE | Agent: pm | idle → active | Task spawned and started
+[2026-02-03T13:44:10.478038] AGENT_SPAWN | Agent: qa | Task: T-20260202-002 | Success: True
+[2026-02-03T13:44:10.484810] STATUS_CHANGE | Agent: qa | idle → active | Task spawned and started
+[2026-02-03T13:44:15.810583] AGENT_SPAWN | Agent: qa | Task: T-20260202-003 | Success: True
+[2026-02-03T13:44:15.820092] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:44:21.339660] AGENT_SPAWN | Agent: qa | Task: T-20260202-004 | Success: True
+[2026-02-03T13:44:21.343545] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:44:26.621250] AGENT_SPAWN | Agent: qa | Task: T-20260202-005 | Success: True
+[2026-02-03T13:44:26.626659] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:44:31.880840] AGENT_SPAWN | Agent: scrum-master | Task: T-20260202-006 | Success: True
+[2026-02-03T13:44:31.893700] STATUS_CHANGE | Agent: scrum-master | idle → active | Task spawned and started
+[2026-02-03T13:45:07.652472] AGENT_SPAWN | Agent: qa | Task: T-20260202-013 | Success: True
+[2026-02-03T13:45:07.660985] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:45:13.132040] AGENT_SPAWN | Agent: qa | Task: T-20260202-014 | Success: True
+[2026-02-03T13:45:13.137271] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:45:18.332125] AGENT_SPAWN | Agent: qa | Task: T-20260202-015 | Success: True
+[2026-02-03T13:45:18.337902] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:45:23.930558] AGENT_SPAWN | Agent: qa | Task: T-20260202-017 | Success: True
+[2026-02-03T13:45:23.938989] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:45:29.569132] AGENT_SPAWN | Agent: qa | Task: T-20260202-018 | Success: True
+[2026-02-03T13:45:29.579078] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:45:34.997981] AGENT_SPAWN | Agent: qa | Task: T-20260202-019 | Success: True
+[2026-02-03T13:45:35.002080] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:45:40.399324] AGENT_SPAWN | Agent: qa | Task: T-20260202-020 | Success: True
+[2026-02-03T13:45:40.404754] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:45:45.683656] AGENT_SPAWN | Agent: qa | Task: T-20260202-021 | Success: True
+[2026-02-03T13:45:45.691404] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:45:51.036162] AGENT_SPAWN | Agent: solo-dev | Task: T-20260202-022 | Success: True
+[2026-02-03T13:45:51.041780] STATUS_CHANGE | Agent: solo-dev | idle → active | Task spawned and started
+[2026-02-03T13:45:56.057953] AGENT_SPAWN | Agent: dev | Task: T-20260202-023 | Success: True
+[2026-02-03T13:45:56.065367] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-03T13:46:00.775109] AGENT_SPAWN | Agent: architect | Task: T-20260202-024 | Success: True
+[2026-02-03T13:46:00.783946] STATUS_CHANGE | Agent: architect | idle → active | Task spawned and started
+[2026-02-03T13:46:05.533303] AGENT_SPAWN | Agent: qa | Task: T-20260202-025 | Success: True
+[2026-02-03T13:46:05.541092] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:46:10.288833] AGENT_SPAWN | Agent: analyst | Task: T-20260202-026 | Success: True
+[2026-02-03T13:46:10.294610] STATUS_CHANGE | Agent: analyst | idle → active | Task spawned and started
+[2026-02-03T13:46:15.071385] AGENT_SPAWN | Agent: qa | Task: T-20260202-028 | Success: True
+[2026-02-03T13:46:15.075867] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T13:46:19.783581] AGENT_SPAWN | Agent: pm | Task: T-20260203-002 | Success: True
+[2026-02-03T13:46:19.791521] STATUS_CHANGE | Agent: pm | idle → active | Task spawned and started
+[2026-02-03T13:46:24.588582] AGENT_SPAWN | Agent: qa | Task: T-20260203-003 | Success: True
+[2026-02-03T13:46:24.592786] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:12:58.677528] AGENT_SPAWN | Agent: qa | Task: T-20260202-002 | Success: True
+[2026-02-03T14:12:58.685005] STATUS_CHANGE | Agent: qa | idle → active | Task spawned and started
+[2026-02-03T14:13:04.478307] AGENT_SPAWN | Agent: qa | Task: T-20260202-003 | Success: True
+[2026-02-03T14:13:04.482903] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:13:09.343051] AGENT_SPAWN | Agent: qa | Task: T-20260202-004 | Success: True
+[2026-02-03T14:13:09.352250] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:13:14.367824] AGENT_SPAWN | Agent: qa | Task: T-20260202-005 | Success: True
+[2026-02-03T14:13:14.373461] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:13:19.535603] AGENT_SPAWN | Agent: scrum-master | Task: T-20260202-006 | Success: True
+[2026-02-03T14:13:19.540713] STATUS_CHANGE | Agent: scrum-master | idle → active | Task spawned and started
+[2026-02-03T14:13:24.751942] AGENT_SPAWN | Agent: qa | Task: T-20260202-013 | Success: True
+[2026-02-03T14:13:24.758868] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:13:29.949659] AGENT_SPAWN | Agent: qa | Task: T-20260202-014 | Success: True
+[2026-02-03T14:13:29.959103] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:13:35.210657] AGENT_SPAWN | Agent: qa | Task: T-20260202-015 | Success: True
+[2026-02-03T14:13:35.220707] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:13:40.772613] AGENT_SPAWN | Agent: qa | Task: T-20260202-017 | Success: True
+[2026-02-03T14:13:40.820618] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:13:46.507036] AGENT_SPAWN | Agent: qa | Task: T-20260202-018 | Success: True
+[2026-02-03T14:13:46.513306] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:13:51.783909] AGENT_SPAWN | Agent: qa | Task: T-20260202-019 | Success: True
+[2026-02-03T14:13:51.791164] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:13:56.929988] AGENT_SPAWN | Agent: qa | Task: T-20260202-020 | Success: True
+[2026-02-03T14:13:56.937832] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:25:22.681058] AGENT_SPAWN | Agent: qa | Task: T-20260202-021 | Success: True
+[2026-02-03T14:25:22.687625] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:40:16.936381] AGENT_SPAWN | Agent: solo-dev | Task: T-20260202-022 | Success: True
+[2026-02-03T14:40:16.943579] STATUS_CHANGE | Agent: solo-dev | idle → active | Task spawned and started
+[2026-02-03T14:40:22.631452] AGENT_SPAWN | Agent: dev | Task: T-20260202-023 | Success: True
+[2026-02-03T14:40:22.635999] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-03T14:40:27.406850] AGENT_SPAWN | Agent: architect | Task: T-20260202-024 | Success: True
+[2026-02-03T14:40:27.413530] STATUS_CHANGE | Agent: architect | idle → active | Task spawned and started
+[2026-02-03T14:40:43.811950] AGENT_SPAWN | Agent: qa | Task: T-20260202-025 | Success: True
+[2026-02-03T14:40:43.817109] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:40:48.356282] AGENT_SPAWN | Agent: analyst | Task: T-20260202-026 | Success: True
+[2026-02-03T14:40:48.362023] STATUS_CHANGE | Agent: analyst | idle → active | Task spawned and started
+[2026-02-03T14:41:03.538420] AGENT_SPAWN | Agent: qa | Task: T-20260202-028 | Success: True
+[2026-02-03T14:41:03.545383] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T14:41:08.251229] AGENT_SPAWN | Agent: pm | Task: T-20260203-002 | Success: True
+[2026-02-03T14:41:08.257125] STATUS_CHANGE | Agent: pm | idle → active | Task spawned and started
+[2026-02-03T14:41:13.226912] AGENT_SPAWN | Agent: qa | Task: T-20260203-003 | Success: True
+[2026-02-03T14:41:13.234691] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-03T22:14:08.286523] STALE_DETECTED | Agent: pm | Task: T-20260203-002 | Last heartbeat: 30+ minutes ago
+[2026-02-03T22:14:08.288265] STATUS_CHANGE | Agent: pm | active → idle | Auto-reset due to timeout
+[2026-02-03T22:14:08.289743] TASK_UPDATE | Agent: pm | Task: T-20260203-002 | in_progress → blocked | Agent timeout
+[2026-02-03T22:14:08.293893] STALE_DETECTED | Agent: analyst | Task: T-20260202-026 | Last heartbeat: 30+ minutes ago
+[2026-02-03T22:14:08.295835] STATUS_CHANGE | Agent: analyst | active → idle | Auto-reset due to timeout
+[2026-02-03T22:14:08.297490] TASK_UPDATE | Agent: analyst | Task: T-20260202-026 | in_progress → blocked | Agent timeout
+[2026-02-03T22:14:08.301164] STALE_DETECTED | Agent: architect | Task: T-20260202-024 | Last heartbeat: 30+ minutes ago
+[2026-02-03T22:14:08.303301] STATUS_CHANGE | Agent: architect | active → idle | Auto-reset due to timeout
+[2026-02-03T22:14:08.305064] TASK_UPDATE | Agent: architect | Task: T-20260202-024 | in_progress → blocked | Agent timeout
+[2026-02-03T22:14:08.308128] STALE_DETECTED | Agent: dev | Task: T-20260202-023 | Last heartbeat: 30+ minutes ago
+[2026-02-03T22:14:08.309915] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-03T22:14:08.311584] TASK_UPDATE | Agent: dev | Task: T-20260202-023 | in_progress → blocked | Agent timeout
+[2026-02-03T22:14:08.314406] STALE_DETECTED | Agent: scrum-master | Task: T-20260202-006 | Last heartbeat: 30+ minutes ago
+[2026-02-03T22:14:08.316034] STATUS_CHANGE | Agent: scrum-master | active → idle | Auto-reset due to timeout
+[2026-02-03T22:14:08.317855] TASK_UPDATE | Agent: scrum-master | Task: T-20260202-006 | in_progress → blocked | Agent timeout
+[2026-02-03T22:14:08.320905] STALE_DETECTED | Agent: qa | Task: T-20260203-003 | Last heartbeat: 30+ minutes ago
+[2026-02-03T22:14:08.322397] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-03T22:14:08.323896] TASK_UPDATE | Agent: qa | Task: T-20260203-003 | in_progress → blocked | Agent timeout
+[2026-02-03T22:14:08.327020] STALE_DETECTED | Agent: solo-dev | Task: T-20260202-022 | Last heartbeat: 30+ minutes ago
+[2026-02-03T22:14:08.328637] STATUS_CHANGE | Agent: solo-dev | active → idle | Auto-reset due to timeout
+[2026-02-03T22:14:08.330218] TASK_UPDATE | Agent: solo-dev | Task: T-20260202-022 | in_progress → blocked | Agent timeout
+[2026-02-03T22:22:00.984726] AGENT_SPAWN | Agent: pm | Task: T-20260203-002 | Success: False | Error: (node:74510) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Ga
+[2026-02-03T22:24:25.889051] AGENT_SPAWN | Agent: pm | Task: T-20260203-002 | Success: False | Error: Timeout
+[2026-02-03T22:26:22.448126] AGENT_SPAWN | Agent: pm | Task: T-20260203-002 | Success: True
+[2026-02-03T22:26:22.451456] STATUS_CHANGE | Agent: pm | idle → active | Task spawned and started
+[2026-02-04T00:49:08.360176] AGENT_SPAWN | Agent: qa | Task: T-20260202-002a | Success: True
+[2026-02-04T00:49:08.363331] STATUS_CHANGE | Agent: qa | idle → active | Task spawned and started
+[2026-02-04T02:00:58.105740] AGENT_SPAWN | Agent: tech-writer | Task: T-20260202-002d | Success: True
+[2026-02-04T02:00:58.112370] STATUS_CHANGE | Agent: tech-writer | idle → active | Task spawned and started
+[2026-02-04T02:30:40.102557] AGENT_SPAWN | Agent: dev | Task: T-20260202-003a | Success: True
+[2026-02-04T02:30:40.110044] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T02:30:41.178637] AGENT_SPAWN | Agent: dev | Task: T-20260202-003b | Success: True
+[2026-02-04T02:30:41.183344] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:30:42.272266] AGENT_SPAWN | Agent: dev | Task: T-20260202-003c | Success: True
+[2026-02-04T02:30:42.285988] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:30:43.361359] AGENT_SPAWN | Agent: ux-designer | Task: T-20260202-003d | Success: True
+[2026-02-04T02:30:43.374834] STATUS_CHANGE | Agent: ux-designer | idle → active | Task spawned and started
+[2026-02-04T02:30:44.471956] AGENT_SPAWN | Agent: dev | Task: T-20260202-003e | Success: True
+[2026-02-04T02:30:44.493897] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:30:45.613137] AGENT_SPAWN | Agent: dev | Task: T-20260202-004a | Success: True
+[2026-02-04T02:30:45.679904] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:30:46.781225] AGENT_SPAWN | Agent: architect | Task: T-20260202-004b | Success: True
+[2026-02-04T02:30:46.839486] STATUS_CHANGE | Agent: architect | idle → active | Task spawned and started
+[2026-02-04T02:30:47.981438] AGENT_SPAWN | Agent: dev | Task: T-20260202-004c | Success: True
+[2026-02-04T02:30:47.998377] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:30:49.098424] AGENT_SPAWN | Agent: dev | Task: T-20260202-004d | Success: True
+[2026-02-04T02:30:49.140193] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:30:50.429987] AGENT_SPAWN | Agent: dev | Task: T-20260202-005a | Success: True
+[2026-02-04T02:30:50.591449] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:30:51.723595] AGENT_SPAWN | Agent: dev | Task: T-20260202-005b | Success: True
+[2026-02-04T02:30:51.752970] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:30:52.919819] AGENT_SPAWN | Agent: dev | Task: T-20260202-005c | Success: True
+[2026-02-04T02:30:52.936186] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:31:27.079921] AGENT_SPAWN | Agent: dev | Task: T-20260202-005d | Success: True
+[2026-02-04T02:31:27.088428] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:31:28.181253] AGENT_SPAWN | Agent: dev | Task: T-20260202-006a | Success: True
+[2026-02-04T02:31:28.188636] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:31:29.324038] AGENT_SPAWN | Agent: dev | Task: T-20260202-006b | Success: True
+[2026-02-04T02:31:29.349863] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:31:30.469045] AGENT_SPAWN | Agent: dev | Task: T-20260202-006c | Success: True
+[2026-02-04T02:31:30.527772] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:31:31.639311] AGENT_SPAWN | Agent: dev | Task: T-20260202-013a | Success: True
+[2026-02-04T02:31:31.682077] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:31:32.812874] AGENT_SPAWN | Agent: dev | Task: T-20260202-013b | Success: True
+[2026-02-04T02:31:32.947163] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:31:34.050299] AGENT_SPAWN | Agent: ux-designer | Task: T-20260202-013c | Success: True
+[2026-02-04T02:31:34.059007] STATUS_CHANGE | Agent: ux-designer | active → active | Task spawned and started
+[2026-02-04T02:31:35.136017] AGENT_SPAWN | Agent: dev | Task: T-20260202-014a | Success: True
+[2026-02-04T02:31:35.154166] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:31:36.286172] AGENT_SPAWN | Agent: dev | Task: T-20260202-014b | Success: True
+[2026-02-04T02:31:36.297934] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:31:37.401300] AGENT_SPAWN | Agent: dev | Task: T-20260202-014c | Success: True
+[2026-02-04T02:31:37.411258] STATUS_CHANGE | Agent: dev | active → active | Task spawned and started
+[2026-02-04T02:31:38.520021] AGENT_SPAWN | Agent: qa | Task: T-20260202-002b | Success: True
+[2026-02-04T02:31:38.566854] STATUS_CHANGE | Agent: qa | idle → active | Task spawned and started
+[2026-02-04T02:31:39.689961] AGENT_SPAWN | Agent: qa | Task: T-20260202-002c | Success: True
+[2026-02-04T02:31:39.722435] STATUS_CHANGE | Agent: qa | active → active | Task spawned and started
+[2026-02-04T02:31:40.887213] AGENT_SPAWN | Agent: ux-designer | Task: T-20260202-015a | Success: True
+[2026-02-04T02:31:40.915441] STATUS_CHANGE | Agent: ux-designer | active → active | Task spawned and started
+[2026-02-04T02:31:42.022069] AGENT_SPAWN | Agent: ux-designer | Task: T-20260202-015b | Success: True
+[2026-02-04T02:31:42.032289] STATUS_CHANGE | Agent: ux-designer | active → active | Task spawned and started
+[2026-02-04T02:31:43.200193] AGENT_SPAWN | Agent: ux-designer | Task: T-20260202-015c | Success: True
+[2026-02-04T02:31:43.250545] STATUS_CHANGE | Agent: ux-designer | active → active | Task spawned and started
+[2026-02-04T02:31:44.598817] AGENT_SPAWN | Agent: ux-designer | Task: T-20260202-015d | Success: True
+[2026-02-04T02:31:44.758890] STATUS_CHANGE | Agent: ux-designer | active → active | Task spawned and started
+[2026-02-04T02:31:45.913217] AGENT_SPAWN | Agent: tech-writer | Task: T-20260202-017a | Success: True
+[2026-02-04T02:31:45.947245] STATUS_CHANGE | Agent: tech-writer | idle → active | Task spawned and started
+[2026-02-04T02:31:47.561318] AGENT_SPAWN | Agent: tech-writer | Task: T-20260202-017b | Success: True
+[2026-02-04T02:31:47.565369] STATUS_CHANGE | Agent: tech-writer | active → active | Task spawned and started
+[2026-02-04T02:31:48.888153] AGENT_SPAWN | Agent: tech-writer | Task: T-20260202-017c | Success: True
+[2026-02-04T02:31:49.085581] STATUS_CHANGE | Agent: tech-writer | active → active | Task spawned and started
+[2026-02-04T03:03:51.383474] AGENT_SPAWN | Agent: qa | Task: T-20260203-001 | Success: True
+[2026-02-04T03:03:51.418187] STATUS_CHANGE | Agent: qa | idle → active | Task spawned and started
+[2026-02-04T03:03:56.065254] STALE_DETECTED | Agent: qa | Task: T-20260203-001 | Last heartbeat: No active agent session
+[2026-02-04T03:03:56.066730] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T03:03:56.068095] TASK_UPDATE | Agent: qa | Task: T-20260203-001 | in_progress → blocked | Agent timeout
+[2026-02-04T03:27:12.026057] AGENT_SPAWN | Agent: analyst | Task: T-20260202-026 | Success: True
+[2026-02-04T03:27:12.030947] STATUS_CHANGE | Agent: analyst | idle → active | Task spawned and started
+[2026-02-04T03:27:13.063674] AGENT_SPAWN | Agent: qa | Task: T-20260202-028 | Success: True
+[2026-02-04T03:27:13.068944] STATUS_CHANGE | Agent: qa | idle → active | Task spawned and started
+[2026-02-04T03:27:14.131581] AGENT_SPAWN | Agent: dev | Task: T-20260202-005c | Success: True
+[2026-02-04T03:27:14.143013] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T03:29:27.820767] STALE_DETECTED | Agent: analyst | Task: T-20260202-026 | Last heartbeat: No active agent session
+[2026-02-04T03:29:27.822982] STATUS_CHANGE | Agent: analyst | active → idle | Auto-reset due to timeout
+[2026-02-04T03:29:27.824896] TASK_UPDATE | Agent: analyst | Task: T-20260202-026 | in_progress → todo | No active agent session
+[2026-02-04T03:29:27.828598] STALE_DETECTED | Agent: dev | Task: T-20260202-005c | Last heartbeat: No active agent session
+[2026-02-04T03:29:27.830385] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T03:29:27.832213] TASK_UPDATE | Agent: dev | Task: T-20260202-005c | in_progress → todo | No active agent session
+[2026-02-04T03:29:52.121841] AGENT_SPAWN | Agent: dev | Task: T-20260202-006a | Success: True
+[2026-02-04T03:29:52.126893] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T03:35:02.996534] AGENT_SPAWN | Agent: dev | Task: T-20260202-006b | Success: True
+[2026-02-04T03:35:03.002219] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T03:39:35.849756] STALE_DETECTED | Agent: dev | Task: T-20260202-006b | Last heartbeat: No active agent session
+[2026-02-04T03:39:35.851153] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T03:39:35.852993] TASK_UPDATE | Agent: dev | Task: T-20260202-006b | in_progress → todo | No active agent session
+[2026-02-04T03:40:13.085117] AGENT_SPAWN | Agent: dev | Task: T-20260202-006c | Success: True
+[2026-02-04T03:40:13.088753] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T03:44:39.598371] STALE_DETECTED | Agent: dev | Task: T-20260202-006c | Last heartbeat: No active agent session
+[2026-02-04T03:44:39.602029] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T03:44:39.604021] TASK_UPDATE | Agent: dev | Task: T-20260202-006c | in_progress → todo | No active agent session
+[2026-02-04T03:44:39.606869] STALE_DETECTED | Agent: qa | Task: T-20260202-006a | Last heartbeat: No active agent session
+[2026-02-04T03:44:39.608718] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T03:44:39.610638] TASK_UPDATE | Agent: qa | Task: T-20260202-006a | in_progress → todo | No active agent session
+[2026-02-04T03:45:22.555367] AGENT_SPAWN | Agent: dev | Task: T-20260202-006b | Success: True
+[2026-02-04T03:45:22.562856] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T03:49:43.515916] STALE_DETECTED | Agent: dev | Task: T-20260202-006b | Last heartbeat: No active agent session
+[2026-02-04T03:49:43.517818] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T03:49:43.519628] TASK_UPDATE | Agent: dev | Task: T-20260202-006b | in_progress → todo | No active agent session
+[2026-02-04T03:49:43.522753] STALE_DETECTED | Agent: qa | Task: T-20260202-006a | Last heartbeat: No active agent session
+[2026-02-04T03:49:43.524301] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T03:49:43.525986] TASK_UPDATE | Agent: qa | Task: T-20260202-006a | in_progress → todo | No active agent session
+[2026-02-04T03:50:31.032905] AGENT_SPAWN | Agent: dev | Task: T-20260202-006c | Success: True
+[2026-02-04T03:50:31.036979] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T03:54:48.577124] STALE_DETECTED | Agent: dev | Task: T-20260202-006c | Last heartbeat: No active agent session
+[2026-02-04T03:54:48.578946] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T03:54:48.580640] TASK_UPDATE | Agent: dev | Task: T-20260202-006c | in_progress → todo | No active agent session
+[2026-02-04T03:54:48.583525] STALE_DETECTED | Agent: qa | Task: T-20260202-006a | Last heartbeat: No active agent session
+[2026-02-04T03:54:48.585400] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T03:54:48.588175] TASK_UPDATE | Agent: qa | Task: T-20260202-006a | in_progress → todo | No active agent session
+[2026-02-04T03:55:41.163100] AGENT_SPAWN | Agent: dev | Task: T-20260202-006b | Success: True
+[2026-02-04T03:55:41.167137] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T03:59:52.833677] STALE_DETECTED | Agent: dev | Task: T-20260202-006b | Last heartbeat: No active agent session
+[2026-02-04T03:59:52.835643] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T03:59:52.837373] TASK_UPDATE | Agent: dev | Task: T-20260202-006b | in_progress → todo | No active agent session
+[2026-02-04T03:59:52.840065] STALE_DETECTED | Agent: qa | Task: T-20260202-006a | Last heartbeat: No active agent session
+[2026-02-04T03:59:52.841414] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T03:59:52.843183] TASK_UPDATE | Agent: qa | Task: T-20260202-006a | in_progress → todo | No active agent session
+[2026-02-04T04:00:49.525212] AGENT_SPAWN | Agent: dev | Task: T-20260202-006c | Success: True
+[2026-02-04T04:00:49.532277] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T04:04:57.886021] STALE_DETECTED | Agent: dev | Task: T-20260202-006c | Last heartbeat: No active agent session
+[2026-02-04T04:04:57.887601] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T04:04:57.888898] TASK_UPDATE | Agent: dev | Task: T-20260202-006c | in_progress → todo | No active agent session
+[2026-02-04T04:04:57.892155] STALE_DETECTED | Agent: qa | Task: T-20260202-001 | Last heartbeat: No active agent session
+[2026-02-04T04:04:57.893943] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T04:04:57.895481] TASK_UPDATE | Agent: qa | Task: T-20260202-001 | in_progress → todo | No active agent session
+[2026-02-04T04:05:57.551120] AGENT_SPAWN | Agent: dev | Task: T-20260202-006b | Success: True
+[2026-02-04T04:05:57.555101] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T04:14:41.155975] STALE_DETECTED | Agent: dev | Task: T-20260202-006b | Last heartbeat: No active agent session
+[2026-02-04T04:14:41.157748] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T04:14:41.159262] TASK_UPDATE | Agent: dev | Task: T-20260202-006b | in_progress → todo | No active agent session
+[2026-02-04T04:14:41.162221] STALE_DETECTED | Agent: qa | Task: T-20260202-001 | Last heartbeat: No active agent session
+[2026-02-04T04:14:41.163825] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T04:14:41.165514] TASK_UPDATE | Agent: qa | Task: T-20260202-001 | in_progress → todo | No active agent session
+[2026-02-04T04:14:41.168920] STALE_DETECTED | Agent: qa-2 | Task: T-20260202-012 | Last heartbeat: No active agent session
+[2026-02-04T04:14:41.170498] STATUS_CHANGE | Agent: qa-2 | active → idle | Auto-reset due to timeout
+[2026-02-04T04:14:41.172219] TASK_UPDATE | Agent: qa-2 | Task: T-20260202-012 | in_progress → todo | No active agent session
+[2026-02-04T04:19:45.463902] AGENT_SPAWN | Agent: dev | Task: T-20260202-006b | Success: True
+[2026-02-04T04:19:45.469941] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T04:19:58.250071] STALE_DETECTED | Agent: dev | Task: T-20260202-006b | Last heartbeat: No active agent session
+[2026-02-04T04:19:58.253513] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T04:19:58.255284] TASK_UPDATE | Agent: dev | Task: T-20260202-006b | in_progress → todo | No active agent session
+[2026-02-04T04:19:58.267821] STALE_DETECTED | Agent: qa | Task: T-20260202-001 | Last heartbeat: No active agent session
+[2026-02-04T04:19:58.269292] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T04:19:58.270779] TASK_UPDATE | Agent: qa | Task: T-20260202-001 | in_progress → todo | No active agent session
+[2026-02-04T04:19:58.273543] STALE_DETECTED | Agent: qa-2 | Task: T-20260202-012 | Last heartbeat: No active agent session
+[2026-02-04T04:19:58.275044] STATUS_CHANGE | Agent: qa-2 | active → idle | Auto-reset due to timeout
+[2026-02-04T04:19:58.276335] TASK_UPDATE | Agent: qa-2 | Task: T-20260202-012 | in_progress → todo | No active agent session
+[2026-02-04T04:25:03.163895] STALE_DETECTED | Agent: qa | Task: T-20260202-001 | Last heartbeat: No active agent session
+[2026-02-04T04:25:03.166600] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T04:25:03.168595] TASK_UPDATE | Agent: qa | Task: T-20260202-001 | in_progress → todo | No active agent session
+[2026-02-04T04:25:03.172273] STALE_DETECTED | Agent: qa-2 | Task: T-20260202-012 | Last heartbeat: No active agent session
+[2026-02-04T04:25:03.174020] STATUS_CHANGE | Agent: qa-2 | active → idle | Auto-reset due to timeout
+[2026-02-04T04:25:03.177999] TASK_UPDATE | Agent: qa-2 | Task: T-20260202-012 | in_progress → todo | No active agent session
+[2026-02-04T04:30:08.054024] STALE_DETECTED | Agent: qa | Task: T-20260202-001 | Last heartbeat: No active agent session
+[2026-02-04T04:30:08.055880] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T04:30:08.057454] TASK_UPDATE | Agent: qa | Task: T-20260202-001 | in_progress → todo | No active agent session
+[2026-02-04T04:32:02.861774] AGENT_SPAWN | Agent: dev | Task: T-20260202-006b | Success: True
+[2026-02-04T04:32:02.865407] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T04:32:03.947465] AGENT_SPAWN | Agent: dev-4 | Task: T-20260202-006c | Success: True
+[2026-02-04T04:32:03.953111] STATUS_CHANGE | Agent: dev-4 | idle → active | Task spawned and started
+[2026-02-04T04:32:05.036153] AGENT_SPAWN | Agent: dev-2 | Task: T-20260202-013a | Success: True
+[2026-02-04T04:32:05.049469] STATUS_CHANGE | Agent: dev-2 | idle → active | Task spawned and started
+[2026-02-04T04:32:06.129806] AGENT_SPAWN | Agent: dev-3 | Task: T-20260202-013b | Success: True
+[2026-02-04T04:32:06.134414] STATUS_CHANGE | Agent: dev-3 | idle → active | Task spawned and started
+[2026-02-04T04:35:12.108393] STALE_DETECTED | Agent: dev | Task: T-20260202-006b | Last heartbeat: No active agent session
+[2026-02-04T04:35:12.110420] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T04:35:12.112695] TASK_UPDATE | Agent: dev | Task: T-20260202-006b | in_progress → todo | No active agent session
+[2026-02-04T04:35:12.115821] STALE_DETECTED | Agent: qa | Task: T-20260202-001 | Last heartbeat: No active agent session
+[2026-02-04T04:35:12.117843] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T04:35:12.119535] TASK_UPDATE | Agent: qa | Task: T-20260202-001 | in_progress → todo | No active agent session
+[2026-02-04T04:35:12.122697] STALE_DETECTED | Agent: dev-2 | Task: T-20260202-013a | Last heartbeat: No active agent session
+[2026-02-04T04:35:12.124240] STATUS_CHANGE | Agent: dev-2 | active → idle | Auto-reset due to timeout
+[2026-02-04T04:35:12.128572] TASK_UPDATE | Agent: dev-2 | Task: T-20260202-013a | in_progress → todo | No active agent session
+[2026-02-04T04:35:12.131753] STALE_DETECTED | Agent: dev-4 | Task: T-20260202-006c | Last heartbeat: No active agent session
+[2026-02-04T04:35:12.133587] STATUS_CHANGE | Agent: dev-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T04:35:12.135223] TASK_UPDATE | Agent: dev-4 | Task: T-20260202-006c | in_progress → todo | No active agent session
+[2026-02-04T04:37:16.895369] AGENT_SPAWN | Agent: dev-4 | Task: T-20260202-014a | Success: True
+[2026-02-04T04:37:16.899622] STATUS_CHANGE | Agent: dev-4 | idle → active | Task spawned and started
+[2026-02-04T04:37:17.979255] AGENT_SPAWN | Agent: dev-2 | Task: T-20260202-014b | Success: True
+[2026-02-04T04:37:17.984325] STATUS_CHANGE | Agent: dev-2 | idle → active | Task spawned and started
+[2026-02-04T04:37:19.070891] AGENT_SPAWN | Agent: dev-3 | Task: T-20260202-014c | Success: True
+[2026-02-04T04:37:19.077192] STATUS_CHANGE | Agent: dev-3 | idle → active | Task spawned and started
+[2026-02-04T04:40:18.433550] STALE_DETECTED | Agent: qa | Task: T-20260202-001 | Last heartbeat: No active agent session
+[2026-02-04T04:40:18.435140] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T04:40:18.436533] TASK_UPDATE | Agent: qa | Task: T-20260202-001 | in_progress → todo | No active agent session
+[2026-02-04T04:40:18.439470] STALE_DETECTED | Agent: dev-2 | Task: T-20260202-014b | Last heartbeat: No active agent session
+[2026-02-04T04:40:18.440971] STATUS_CHANGE | Agent: dev-2 | active → idle | Auto-reset due to timeout
+[2026-02-04T04:40:18.442267] TASK_UPDATE | Agent: dev-2 | Task: T-20260202-014b | in_progress → todo | No active agent session
+[2026-02-04T04:42:30.201028] AGENT_SPAWN | Agent: dev | Task: T-20260202-006b | Success: True
+[2026-02-04T04:42:30.221115] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T04:42:31.269737] AGENT_SPAWN | Agent: dev-2 | Task: T-20260202-013a | Success: True
+[2026-02-04T04:42:31.274961] STATUS_CHANGE | Agent: dev-2 | idle → active | Task spawned and started
+[2026-02-04T04:45:22.643450] STALE_DETECTED | Agent: dev | Task: T-20260202-006b | Last heartbeat: No active agent session
+[2026-02-04T04:45:22.645374] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T04:45:22.648398] TASK_UPDATE | Agent: dev | Task: T-20260202-006b | in_progress → todo | No active agent session
+[2026-02-04T04:55:00.935799] AGENT_SPAWN | Agent: qa | Task: T-20260202-019 | Success: True
+[2026-02-04T04:55:00.939294] STATUS_CHANGE | Agent: qa | idle → active | Task spawned and started
+[2026-02-04T04:55:01.996517] AGENT_SPAWN | Agent: dev | Task: T-20260202-006b | Success: True
+[2026-02-04T04:55:02.000537] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T04:55:07.004182] STALE_DETECTED | Agent: dev | Task: T-20260202-006b | Last heartbeat: No active agent session
+[2026-02-04T04:55:07.006000] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T04:55:07.007565] TASK_UPDATE | Agent: dev | Task: T-20260202-006b | in_progress → todo | No active agent session
+[2026-02-04T04:55:07.010416] STALE_DETECTED | Agent: qa | Task: T-20260202-019 | Last heartbeat: No active agent session
+[2026-02-04T04:55:07.011701] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T04:55:07.012902] TASK_UPDATE | Agent: qa | Task: T-20260202-019 | in_progress → todo | No active agent session
+[2026-02-04T04:55:07.015534] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-020 | Last heartbeat: No active agent session
+[2026-02-04T04:55:07.017014] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T04:55:07.018334] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-020 | in_progress → todo | No active agent session
+[2026-02-04T04:55:07.020908] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-021 | Last heartbeat: No active agent session
+[2026-02-04T04:55:07.022572] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T04:55:07.024351] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-021 | in_progress → todo | No active agent session
+[2026-02-04T05:00:16.612903] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-024 | Last heartbeat: No active agent session
+[2026-02-04T05:00:16.614688] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:00:16.616563] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-024 | in_progress → todo | No active agent session
+[2026-02-04T05:00:16.619446] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-025 | Last heartbeat: No active agent session
+[2026-02-04T05:00:16.620843] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:00:16.622365] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-025 | in_progress → todo | No active agent session
+[2026-02-04T05:05:21.580502] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-024 | Last heartbeat: No active agent session
+[2026-02-04T05:05:21.583323] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:05:21.585238] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-024 | in_progress → todo | No active agent session
+[2026-02-04T05:05:21.587939] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-027 | Last heartbeat: No active agent session
+[2026-02-04T05:05:21.589577] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:05:21.591310] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-027 | in_progress → todo | No active agent session
+[2026-02-04T05:10:20.715614] AGENT_SPAWN | Agent: architect | Task: T-20260202-024 | Success: True
+[2026-02-04T05:10:20.719946] STATUS_CHANGE | Agent: architect | idle → active | Task spawned and started
+[2026-02-04T05:10:21.734301] AGENT_SPAWN | Agent: qa | Task: T-20260202-019 | Success: True
+[2026-02-04T05:10:21.738578] STATUS_CHANGE | Agent: qa | idle → active | Task spawned and started
+[2026-02-04T05:10:22.808687] AGENT_SPAWN | Agent: dev | Task: T-20260202-006b | Success: True
+[2026-02-04T05:10:22.813165] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T05:10:28.312068] STALE_DETECTED | Agent: architect | Task: T-20260202-024 | Last heartbeat: No active agent session
+[2026-02-04T05:10:28.313931] STATUS_CHANGE | Agent: architect | active → idle | Auto-reset due to timeout
+[2026-02-04T05:10:28.316501] TASK_UPDATE | Agent: architect | Task: T-20260202-024 | in_progress → todo | No active agent session
+[2026-02-04T05:10:28.320210] STALE_DETECTED | Agent: dev | Task: T-20260202-006b | Last heartbeat: No active agent session
+[2026-02-04T05:10:28.321800] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T05:10:28.323437] TASK_UPDATE | Agent: dev | Task: T-20260202-006b | in_progress → todo | No active agent session
+[2026-02-04T05:10:28.326482] STALE_DETECTED | Agent: qa | Task: T-20260202-019 | Last heartbeat: No active agent session
+[2026-02-04T05:10:28.327930] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T05:10:28.329483] TASK_UPDATE | Agent: qa | Task: T-20260202-019 | in_progress → todo | No active agent session
+[2026-02-04T05:10:28.333758] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-027 | Last heartbeat: No active agent session
+[2026-02-04T05:10:28.335357] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:10:28.336694] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-027 | in_progress → todo | No active agent session
+[2026-02-04T05:20:41.093760] AGENT_SPAWN | Agent: qa | Task: T-20260202-028 | Success: True
+[2026-02-04T05:20:41.098144] STATUS_CHANGE | Agent: qa | idle → active | Task spawned and started
+[2026-02-04T05:20:42.148809] AGENT_SPAWN | Agent: dev | Task: T-20260202-006b | Success: True
+[2026-02-04T05:20:42.154852] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T05:20:46.884911] STALE_DETECTED | Agent: dev | Task: T-20260202-006b | Last heartbeat: No active agent session
+[2026-02-04T05:20:46.886601] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T05:20:46.888373] TASK_UPDATE | Agent: dev | Task: T-20260202-006b | in_progress → todo | No active agent session
+[2026-02-04T05:20:46.891497] STALE_DETECTED | Agent: qa | Task: T-20260202-028 | Last heartbeat: No active agent session
+[2026-02-04T05:20:46.892895] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T05:20:46.894171] TASK_UPDATE | Agent: qa | Task: T-20260202-028 | in_progress → todo | No active agent session
+[2026-02-04T05:20:46.896987] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-024 | Last heartbeat: No active agent session
+[2026-02-04T05:20:46.898489] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:20:46.900010] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-024 | in_progress → todo | No active agent session
+[2026-02-04T05:25:52.641626] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-028 | Last heartbeat: No active agent session
+[2026-02-04T05:25:52.643748] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:25:52.645411] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-028 | in_progress → todo | No active agent session
+[2026-02-04T05:25:52.648231] STALE_DETECTED | Agent: qa-4 | Task: T-20260203-001 | Last heartbeat: No active agent session
+[2026-02-04T05:25:52.649686] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:25:52.651256] TASK_UPDATE | Agent: qa-4 | Task: T-20260203-001 | in_progress → todo | No active agent session
+[2026-02-04T05:30:57.835385] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-028 | Last heartbeat: No active agent session
+[2026-02-04T05:30:57.837012] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:30:57.838359] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-028 | in_progress → todo | No active agent session
+[2026-02-04T05:30:57.840936] STALE_DETECTED | Agent: qa-4 | Task: T-20260203-002 | Last heartbeat: No active agent session
+[2026-02-04T05:30:57.842791] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:30:57.844314] TASK_UPDATE | Agent: qa-4 | Task: T-20260203-002 | in_progress → todo | No active agent session
+[2026-02-04T05:36:00.651843] AGENT_SPAWN | Agent: qa | Task: T-20260203-003 | Success: True
+[2026-02-04T05:36:00.654963] STATUS_CHANGE | Agent: qa | idle → active | Task spawned and started
+[2026-02-04T05:36:05.416899] STALE_DETECTED | Agent: qa | Task: T-20260203-003 | Last heartbeat: No active agent session
+[2026-02-04T05:36:05.418364] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T05:36:05.419717] TASK_UPDATE | Agent: qa | Task: T-20260203-003 | in_progress → todo | No active agent session
+[2026-02-04T05:36:05.422309] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-003a | Last heartbeat: No active agent session
+[2026-02-04T05:36:05.423765] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:36:05.425241] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-003a | in_progress → todo | No active agent session
+[2026-02-04T05:41:11.443970] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-003b | Last heartbeat: No active agent session
+[2026-02-04T05:41:11.445602] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:41:11.447144] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-003b | in_progress → todo | No active agent session
+[2026-02-04T05:46:16.180894] STALE_DETECTED | Agent: qa-3 | Task: T-20260203-003 | Last heartbeat: No active agent session
+[2026-02-04T05:46:16.182752] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:46:16.184224] TASK_UPDATE | Agent: qa-3 | Task: T-20260203-003 | in_progress → todo | No active agent session
+[2026-02-04T05:46:16.186776] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-003c | Last heartbeat: No active agent session
+[2026-02-04T05:46:16.188224] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:46:16.189490] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-003c | in_progress → todo | No active agent session
+[2026-02-04T05:51:21.204460] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-003d | Last heartbeat: No active agent session
+[2026-02-04T05:51:21.205869] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:51:21.207295] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-003d | in_progress → todo | No active agent session
+[2026-02-04T05:51:21.210400] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-003e | Last heartbeat: No active agent session
+[2026-02-04T05:51:21.211734] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:51:21.213225] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-003e | in_progress → todo | No active agent session
+[2026-02-04T05:56:27.119209] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-004a | Last heartbeat: No active agent session
+[2026-02-04T05:56:27.120764] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:56:27.122078] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-004a | in_progress → todo | No active agent session
+[2026-02-04T05:56:27.124918] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-004b | Last heartbeat: No active agent session
+[2026-02-04T05:56:27.126411] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T05:56:27.127775] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-004b | in_progress → todo | No active agent session
+[2026-02-04T06:01:33.780041] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-004c | Last heartbeat: No active agent session
+[2026-02-04T06:01:33.781785] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:01:33.783302] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-004c | in_progress → todo | No active agent session
+[2026-02-04T06:01:33.785962] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-004d | Last heartbeat: No active agent session
+[2026-02-04T06:01:33.787261] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:01:33.788711] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-004d | in_progress → todo | No active agent session
+[2026-02-04T06:06:38.958259] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-005a | Last heartbeat: No active agent session
+[2026-02-04T06:06:38.960076] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:06:38.961472] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-005a | in_progress → todo | No active agent session
+[2026-02-04T06:06:38.964133] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-005b | Last heartbeat: No active agent session
+[2026-02-04T06:06:38.965729] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:06:38.967440] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-005b | in_progress → todo | No active agent session
+[2026-02-04T06:11:44.041716] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-005c | Last heartbeat: No active agent session
+[2026-02-04T06:11:44.043672] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:11:44.045484] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-005c | in_progress → todo | No active agent session
+[2026-02-04T06:11:44.048540] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-005d | Last heartbeat: No active agent session
+[2026-02-04T06:11:44.050180] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:11:44.051914] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-005d | in_progress → todo | No active agent session
+[2026-02-04T06:16:49.551295] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-006a | Last heartbeat: No active agent session
+[2026-02-04T06:16:49.552953] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:16:49.554281] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-006a | in_progress → todo | No active agent session
+[2026-02-04T06:16:49.557086] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-006b | Last heartbeat: No active agent session
+[2026-02-04T06:16:49.558943] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:16:49.560542] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-006b | in_progress → todo | No active agent session
+[2026-02-04T06:21:56.316394] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-006c | Last heartbeat: No active agent session
+[2026-02-04T06:21:56.317820] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:21:56.319122] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-006c | in_progress → todo | No active agent session
+[2026-02-04T06:21:56.321594] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-013a | Last heartbeat: No active agent session
+[2026-02-04T06:21:56.322836] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:21:56.324221] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-013a | in_progress → todo | No active agent session
+[2026-02-04T06:27:03.190255] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-013b | Last heartbeat: No active agent session
+[2026-02-04T06:27:03.191865] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:27:03.193230] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-013b | in_progress → todo | No active agent session
+[2026-02-04T06:27:03.195868] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-013c | Last heartbeat: No active agent session
+[2026-02-04T06:27:03.197425] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:27:03.198817] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-013c | in_progress → todo | No active agent session
+[2026-02-04T06:32:09.576749] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-014a | Last heartbeat: No active agent session
+[2026-02-04T06:32:09.578432] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:32:09.580008] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-014a | in_progress → todo | No active agent session
+[2026-02-04T06:37:15.990232] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-014c | Last heartbeat: No active agent session
+[2026-02-04T06:37:15.991814] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:37:15.993330] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-014c | in_progress → todo | No active agent session
+[2026-02-04T06:37:15.996664] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-002a | Last heartbeat: No active agent session
+[2026-02-04T06:37:15.998090] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:37:15.999345] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-002a | in_progress → todo | No active agent session
+[2026-02-04T06:42:21.745454] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-002b | Last heartbeat: No active agent session
+[2026-02-04T06:42:21.747194] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:42:21.748535] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-002b | in_progress → todo | No active agent session
+[2026-02-04T06:42:21.751057] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-002c | Last heartbeat: No active agent session
+[2026-02-04T06:42:21.752456] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:42:21.753891] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-002c | in_progress → todo | No active agent session
+[2026-02-04T06:47:29.912397] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-002d | Last heartbeat: No active agent session
+[2026-02-04T06:47:29.914104] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:47:29.915633] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-002d | in_progress → todo | No active agent session
+[2026-02-04T06:47:29.918632] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-015a | Last heartbeat: No active agent session
+[2026-02-04T06:47:29.920086] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:47:29.921444] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-015a | in_progress → todo | No active agent session
+[2026-02-04T06:52:33.928869] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-015b | Last heartbeat: No active agent session
+[2026-02-04T06:52:33.930427] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:52:33.931881] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-015b | in_progress → todo | No active agent session
+[2026-02-04T06:52:33.934818] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-015c | Last heartbeat: No active agent session
+[2026-02-04T06:52:33.936149] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:52:33.937362] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-015c | in_progress → todo | No active agent session
+[2026-02-04T06:57:39.590416] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-015d | Last heartbeat: No active agent session
+[2026-02-04T06:57:39.592198] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:57:39.593630] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-015d | in_progress → todo | No active agent session
+[2026-02-04T06:57:39.596456] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-017a | Last heartbeat: No active agent session
+[2026-02-04T06:57:39.597935] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T06:57:39.599249] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-017a | in_progress → todo | No active agent session
+[2026-02-04T07:02:43.817905] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-017b | Last heartbeat: No active agent session
+[2026-02-04T07:02:43.819548] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
+[2026-02-04T07:02:43.821091] TASK_UPDATE | Agent: qa-3 | Task: T-20260202-017b | in_progress → todo | No active agent session
+[2026-02-04T07:02:43.824218] STALE_DETECTED | Agent: qa-4 | Task: T-20260202-017c | Last heartbeat: No active agent session
+[2026-02-04T07:02:43.825606] STATUS_CHANGE | Agent: qa-4 | active → idle | Auto-reset due to timeout
+[2026-02-04T07:02:43.826928] TASK_UPDATE | Agent: qa-4 | Task: T-20260202-017c | in_progress → todo | No active agent session
+[2026-02-04T19:23:44.613526] AGENT_SPAWN | Agent: analyst | Task: T-20260202-001 | Success: True
+[2026-02-04T19:23:44.617072] STATUS_CHANGE | Agent: analyst | idle → active | Task spawned and started
+[2026-02-04T19:23:51.959592] STALE_DETECTED | Agent: analyst | Task: T-20260202-001 | Last heartbeat: No active agent session
+[2026-02-04T19:23:51.961018] STATUS_CHANGE | Agent: analyst | active → idle | Auto-reset due to timeout
+[2026-02-04T19:23:51.962441] TASK_UPDATE | Agent: analyst | Task: T-20260202-001 | in_progress → todo | No active agent session
+[2026-02-04T19:23:51.964953] STALE_DETECTED | Agent: qa | Task: T-20260202-001 | Last heartbeat: No active agent session
+[2026-02-04T19:23:51.966222] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-04T19:23:51.967406] TASK_UPDATE | Agent: qa | Task: T-20260202-001 | in_progress → todo | No active agent session
+[2026-02-04T19:23:51.970023] STALE_DETECTED | Agent: qa-2 | Task: T-20260202-019 | Last heartbeat: No active agent session
+[2026-02-04T19:23:51.971431] STATUS_CHANGE | Agent: qa-2 | active → idle | Auto-reset due to timeout
+[2026-02-04T19:23:51.973282] TASK_UPDATE | Agent: qa-2 | Task: T-20260202-019 | in_progress → todo | No active agent session
+[2026-02-04T21:03:54.680303] AGENT_SPAWN | Agent: dev | Task: T-20260202-019 | Success: True
+[2026-02-04T21:03:54.687927] STATUS_CHANGE | Agent: dev | idle → active | Task spawned and started
+[2026-02-04T21:07:38.116570] STALE_DETECTED | Agent: dev | Task: T-20260202-019 | Last heartbeat: No active agent session
+[2026-02-04T21:07:38.118542] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-04T21:07:38.119910] TASK_UPDATE | Agent: dev | Task: T-20260202-019 | in_progress → todo | No active agent session
+[2026-02-05T00:24:52.055348] AGENT_SPAWN | Agent: dev | Task: T-20260202-019 | Success: True
+[2026-02-05T00:24:52.063400] STATUS_CHANGE | Agent: dev | idle → active | Task spawned (waiting for explicit start)
+[2026-02-05T00:24:56.713899] STALE_DETECTED | Agent: dev | Task: T-20260202-019 | Last heartbeat: No active agent session
+[2026-02-05T00:24:56.715974] STATUS_CHANGE | Agent: dev | active → idle | Auto-reset due to timeout
+[2026-02-05T00:24:56.717670] TASK_UPDATE | Agent: dev | Task: T-20260202-019 | in_progress → todo | No active agent session
+[2026-02-05T01:17:05.771975] STALE_DETECTED | Agent: qa | Task: T-20260202-019 | Last heartbeat: No active agent session
+[2026-02-05T01:17:05.773596] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-05T01:17:05.774963] TASK_UPDATE | Agent: qa | Task: T-20260202-019 | reviewing → review | No active agent session
+[2026-02-05T01:19:48.510015] STALE_DETECTED | Agent: qa | Task: T-20260202-019 | Last heartbeat: No active agent session
+[2026-02-05T01:19:48.513774] STATUS_CHANGE | Agent: qa | active → idle | Auto-reset due to timeout
+[2026-02-05T01:19:48.515885] TASK_UPDATE | Agent: qa | Task: T-20260202-019 | reviewing → review | No active agent session
+[2026-02-05T01:20:55.145213] STALE_DETECTED | Agent: qa-2 | Task: T-20260202-019 | Last heartbeat: No active agent session
+[2026-02-05T01:20:55.146802] STATUS_CHANGE | Agent: qa-2 | active → idle | Auto-reset due to timeout
+[2026-02-05T01:20:55.147971] TASK_UPDATE | Agent: qa-2 | Task: T-20260202-019 | reviewing → review | No active agent session
+[2026-02-05T01:26:30.226219] STALE_DETECTED | Agent: qa-3 | Task: T-20260202-019 | Last heartbeat: No active agent session
+[2026-02-05T01:26:30.227748] STATUS_CHANGE | Agent: qa-3 | active → idle | Auto-reset due to timeout
