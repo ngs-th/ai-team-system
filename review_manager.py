@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from agent_runtime import spawn_agent
+
 DB_PATH = Path(__file__).parent / "team.db"
 LOG_DIR = Path(__file__).parent / "logs"
 REVIEW_MINUTES = int(os.getenv("AI_TEAM_REVIEW_MINUTES", "10"))
@@ -229,7 +231,6 @@ python3 {base_dir}/team_db.py task reject {task['id']} --reviewer {reviewer_id} 
 
 
 def spawn_review_agent(task: sqlite3.Row, reviewer_id: str) -> bool:
-    import subprocess
     import time
 
     message = build_review_message(task, reviewer_id)
@@ -237,22 +238,16 @@ def spawn_review_agent(task: sqlite3.Row, reviewer_id: str) -> bool:
     log_dir.mkdir(exist_ok=True)
     log_path = log_dir / f"review_{task['id']}_{reviewer_id}_{int(time.time())}.log"
 
-    with open(log_path, "w") as logf:
-        proc = subprocess.Popen(
-            ['openclaw', 'agent',
-             '--agent', reviewer_id,
-             '--message', message,
-             '--timeout', '3600'],
-            stdout=logf,
-            stderr=logf,
-            text=True,
-            start_new_session=True
-        )
-
-    time.sleep(1)
-    if proc.poll() is not None and proc.returncode != 0:
-        return False
-    return True
+    ok, _ = spawn_agent(
+        agent_id=reviewer_id,
+        task_id=task["id"],
+        working_dir=task["working_dir"] or str(Path(__file__).parent),
+        message=message,
+        log_path=log_path,
+        timeout_seconds=3600,
+        label=f"{reviewer_id}-{task['id']}",
+    )
+    return ok
 
 def reconcile_completed_tasks(verbose: bool = False) -> None:
     """Move tasks with completion evidence into review."""

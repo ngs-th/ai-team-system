@@ -5,39 +5,15 @@ Periodic sync to ensure database matches actual agent states
 """
 
 import sqlite3
-import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from audit_log import AuditLogger
+from agent_runtime import get_openclaw_session_last_seen, runtime_supports_sessions
 
 DB_PATH = Path(__file__).parent / "team.db"
 audit = AuditLogger()
 
-OPENCLAW_STATE_DIR = Path.home() / ".openclaw"
 SESSION_ACTIVE_MINUTES = 20
-
-def get_agent_session_last_seen(agent_id: str):
-    """Return last session update time for a given agent (or None)."""
-    path = OPENCLAW_STATE_DIR / "agents" / agent_id / "sessions" / "sessions.json"
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-    except Exception:
-        return None
-    sessions = data.get("sessions", [])
-    latest_ms = 0
-    for sess in sessions:
-        updated = sess.get("updatedAt") or sess.get("updated_at") or 0
-        try:
-            updated = int(updated)
-        except Exception:
-            updated = 0
-        if updated > latest_ms:
-            latest_ms = updated
-    if latest_ms <= 0:
-        return None
-    return datetime.fromtimestamp(latest_ms / 1000)
 
 
 def parse_sqlite_dt(value: str):
@@ -63,12 +39,22 @@ def check_stale_agents():
     stale = []
     now = datetime.now()
     for agent_id, name, task_id, last_hb, status, task_status in agents:
-        last_seen = get_agent_session_last_seen(agent_id)
+        hb_dt = parse_sqlite_dt(last_hb)
+        heartbeat_active = (
+            hb_dt is not None and
+            now - hb_dt <= timedelta(minutes=SESSION_ACTIVE_MINUTES)
+        )
+
+        last_seen = get_openclaw_session_last_seen(agent_id) if runtime_supports_sessions() else None
         session_active = (
             last_seen is not None and
             now - last_seen <= timedelta(minutes=SESSION_ACTIVE_MINUTES)
-        )
-        if status == 'active' and not session_active:
+        ) if runtime_supports_sessions() else False
+
+        # OpenClaw mode: require active session OR recent heartbeat.
+        # Other runtimes: rely on heartbeat only.
+        runtime_active = (session_active or heartbeat_active) if runtime_supports_sessions() else heartbeat_active
+        if status == 'active' and not runtime_active:
             stale.append((agent_id, name, task_id, last_hb, last_seen))
     return stale
 
@@ -172,14 +158,21 @@ def sync_agent_states():
     orphaned = []
     now = datetime.now()
     for task_id, agent_id, updated_at, agent_status in cursor.fetchall():
-        last_seen = get_agent_session_last_seen(agent_id)
+        hb_row = cursor.execute('SELECT last_heartbeat FROM agents WHERE id = ?', (agent_id,)).fetchone()
+        hb_dt = parse_sqlite_dt(hb_row[0]) if hb_row else None
+        heartbeat_active = (
+            hb_dt is not None and
+            now - hb_dt <= timedelta(minutes=SESSION_ACTIVE_MINUTES)
+        )
+        last_seen = get_openclaw_session_last_seen(agent_id) if runtime_supports_sessions() else None
         session_active = (
             last_seen is not None and
             now - last_seen <= timedelta(minutes=SESSION_ACTIVE_MINUTES)
-        )
+        ) if runtime_supports_sessions() else False
+        runtime_active = (session_active or heartbeat_active) if runtime_supports_sessions() else heartbeat_active
         last_update = parse_sqlite_dt(updated_at)
         stale_update = (last_update is None) or (now - last_update > timedelta(minutes=SESSION_ACTIVE_MINUTES))
-        if (not session_active) and stale_update:
+        if (not runtime_active) and stale_update:
             orphaned.append((task_id, agent_id))
 
     for task_id, agent_id in orphaned:
@@ -188,6 +181,7 @@ def sync_agent_states():
             SET status = 'todo',
                 started_at = NULL,
                 blocked_reason = NULL,
+                blocked_at = NULL,
                 todo_at = datetime('now', 'localtime'),
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
@@ -203,16 +197,23 @@ def sync_agent_states():
     # Summarize active sessions
     conn = sqlite3.connect(str(DB_PATH), timeout=10)
     cursor = conn.cursor()
-    cursor.execute('SELECT id, status FROM agents')
+    cursor.execute('SELECT id, status, last_heartbeat FROM agents')
     agents = cursor.fetchall()
     conn.close()
     now = datetime.now()
     active_count = 0
-    for agent_id, status in agents:
-        last_seen = get_agent_session_last_seen(agent_id)
-        if last_seen and now - last_seen <= timedelta(minutes=SESSION_ACTIVE_MINUTES):
-            active_count += 1
-    print(f"\n📊 Active agent sessions (last {SESSION_ACTIVE_MINUTES}m): {active_count}")
+    for agent_id, status, last_hb in agents:
+        if runtime_supports_sessions():
+            last_seen = get_openclaw_session_last_seen(agent_id)
+            if last_seen and now - last_seen <= timedelta(minutes=SESSION_ACTIVE_MINUTES):
+                active_count += 1
+        else:
+            # Runtime without session API: use DB heartbeat as liveness proxy.
+            hb_dt = parse_sqlite_dt(last_hb)
+            if hb_dt and now - hb_dt <= timedelta(minutes=SESSION_ACTIVE_MINUTES):
+                active_count += 1
+    metric = "sessions" if runtime_supports_sessions() else "heartbeats"
+    print(f"\n📊 Active agent {metric} (last {SESSION_ACTIVE_MINUTES}m): {active_count}")
     
     print("\n" + "=" * 60)
     print("✅ Sync complete")

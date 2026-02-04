@@ -68,8 +68,8 @@
 │                             │                                    │
 │                             ▼                                    │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │                    OpenClaw Gateway                      │    │
-│  │            (CLI: openclaw agent / sessions)              │    │
+│  │                  Agent Runtime Adapter                   │    │
+│  │   (openclaw | claude_code via AI_TEAM_AGENT_RUNTIME)    │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │                             │                                    │
 │                             ▼                                    │
@@ -107,7 +107,7 @@
 ```
 1. Create Task → Database (status=todo)
 2. Auto-Assign → Database (assignee_id=agent, status=todo)
-3. Spawn Manager → OpenClaw (spawn agent)
+3. Spawn Manager → Runtime Adapter (spawn agent)
 4. Agent Starts → agent_reporter.py start → Database (status=in_progress)
 5. Agent Works → Every 30 min: agent_reporter.py heartbeat
 6. Agent Done → agent_reporter.py complete → Database (status=review)
@@ -123,7 +123,7 @@
 
 ## 3. Agent Roster
 
-> รายชื่อด้านล่างคือ **agents ในระบบจริง** (team.db + OpenClaw)
+> รายชื่อด้านล่างคือ **agents ในระบบจริง** (team.db + active runtime)
 
 | # | Agent ID | ชื่อ | บทบาท | Model |
 |---|---------|------|-------|-------|
@@ -417,10 +417,11 @@ python3 agent_reporter.py complete \
 ### 7.3 Stale Agent Detection
 
 **Agent Sync** (cron every 5 minutes) automatically:
-1. ตรวจ session จริงจาก OpenClaw (ภายใน ~20 นาทีล่าสุด)
+1. ตรวจสัญญาณ runtime (session ถ้าเป็น OpenClaw, heartbeat ถ้า runtime อื่น)
 2. รีเซ็ต agent ที่ไม่ active → `idle`
 3. ถ้ามีงานค้างใน `in_progress` → ย้ายกลับ `todo` (ไม่ block)
-4. Logs to audit_log
+4. ถ้ามีงานค้างใน `reviewing` และ reviewer หาย → ย้ายกลับ `review` (Waiting for Review)
+5. Logs to audit_log
 
 ---
 
@@ -455,7 +456,7 @@ Check for each task:
   - Agent not busy (DB/session)
   - Not spawned recently (>10 min)?
     ↓
-Spawn subagent via OpenClaw API
+Spawn subagent via Runtime Adapter
   - Log to audit_log
     ↓
 Update database:
@@ -556,6 +557,7 @@ python3 team_db.py agent comm read <message_id>
 | File | Purpose |
 |------|---------|
 | `team_db.py` | Main CLI tool for tasks, agents, notifications |
+| `agent_runtime.py` | Runtime adapter สำหรับ spawn agent (`openclaw`/`claude_code`) |
 | `spawn_manager_fixed.py` | Spawn subagents และผูก agent/task โดยไม่บังคับ in_progress |
 | `agent_reporter.py` | Agents report status back to system |
 | `agent_sync.py` | Detect and reset stale agents |
@@ -573,6 +575,24 @@ python3 team_db.py agent comm read <message_id>
 | `agent_comm_hub.py` | Facilitate agent communication |
 | `STANDBY_AGENTS.md` | Active agent session keys |
 | `docs/IMPLEMENTATION.md` | Implementation details |
+
+### 12.1 Runtime Configuration
+
+```bash
+# Default
+export AI_TEAM_AGENT_RUNTIME=openclaw
+
+# Switch to Claude Code runtime
+export AI_TEAM_AGENT_RUNTIME=claude_code
+
+# Optional: custom command (default: "claude code")
+export AI_TEAM_CLAUDE_CMD="claude code"
+
+# Advanced: full template with placeholders {agent_id} {message} {timeout}
+export AI_TEAM_CLAUDE_CMD_TEMPLATE='claude code --agent {agent_id} --message "{message}" --timeout {timeout}'
+```
+
+**หมายเหตุ:** ถ้า runtime ไม่รองรับ session API, ระบบจะใช้ `last_heartbeat` เป็นสัญญาณ liveness แทน
 | `docs/architecture/ERD.md` | ERD (logical data model) ของ `team.db` |
 
 ---
@@ -678,6 +698,15 @@ python3 agent_comm_hub.py --send "agent_id:Message"
 ---
 
 ## 14. Recent Changes
+
+### v4.1.3 (2026-02-05) - Runtime Adapter (OpenClaw / Claude Code)
+
+**Changes:**
+- ✅ เพิ่ม `agent_runtime.py` เป็น runtime adapter กลาง
+- ✅ Spawn path ทั้งหมด (`spawn_manager_fixed.py`, `auto_assign.py`, `review_manager.py`) เรียกผ่าน adapter เดียว
+- ✅ รองรับ `AI_TEAM_AGENT_RUNTIME=claude_code` โดยไม่ต้องแก้ orchestrator หลัก
+- ✅ ปรับ `agent_sync.py` ให้ fallback ไปใช้ heartbeat เมื่อ runtime ไม่มี session API
+- ✅ ลดอาการงานค้าง `reviewing` ด้วยการคืนงานกลับ `review` เมื่อ reviewer stale
 
 ### v4.1.2 (2026-02-05) - Reject/Blocked Semantics Fix
 

@@ -10,6 +10,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
+from agent_runtime import spawn_agent
 
 os.environ['TZ'] = 'Asia/Bangkok'
 
@@ -258,48 +259,45 @@ python3 {base_dir}/team_db.py task reject {task['id']} --reason "Prerequisite no
 **CRITICAL:** Always work in `{working_dir}` - never anywhere else!
 """
 
-            # Update agent status to active
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                UPDATE agents 
-                SET status = 'active', last_heartbeat = datetime('now', 'localtime')
-                WHERE id = ?
-            ''', (agent['id'],))
-            self.conn.commit()
-            
-            # Spawn subagent via OpenClaw gateway (detached)
-            import subprocess
+            # Spawn subagent via configured runtime (detached)
             import time
             label = f"{agent['id']}-{task['id']}"
-            spawn_request = f"""[AI-TEAM TASK]
-LABEL: {label}
-WORKING_DIR: {working_dir}
-TASK_ID: {task['id']}
-AGENT_ID: {agent['id']}
-
-{task_message}
-"""
             log_dir = Path(__file__).parent / "logs"
             log_dir.mkdir(exist_ok=True)
             log_path = log_dir / f"auto_assign_{task['id']}_{int(time.time())}.log"
 
-            with open(log_path, "w") as logf:
-                proc = subprocess.Popen(
-                    ['openclaw', 'agent',
-                     '--agent', agent['id'],
-                     '--message', spawn_request,
-                     '--timeout', '3600'],
-                    stdout=logf,
-                    stderr=logf,
-                    text=True,
-                    start_new_session=True
-                )
-
-            time.sleep(1)
-            if proc.poll() is not None and proc.returncode != 0:
-                print(f"  ⚠️  Assigned to {agent['name']} - agent start failed (log: {log_path})")
+            ok, details = spawn_agent(
+                agent_id=agent["id"],
+                task_id=task["id"],
+                working_dir=working_dir,
+                message=task_message,
+                log_path=log_path,
+                timeout_seconds=3600,
+                label=label,
+            )
+            if not ok:
+                print(f"  ⚠️  Assigned to {agent['name']} - agent start failed ({details})")
+                # Roll back runtime state so scheduler can retry safely.
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    UPDATE agents
+                    SET status = 'idle',
+                        current_task_id = NULL,
+                        updated_at = datetime('now', 'localtime')
+                    WHERE id = ?
+                ''', (agent['id'],))
+                self.conn.commit()
             else:
-                print(f"  🚀 Agent run started for {agent['name']} ({task['id']}) (log: {log_path})")
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    UPDATE agents
+                    SET status = 'active',
+                        last_heartbeat = datetime('now', 'localtime'),
+                        updated_at = datetime('now', 'localtime')
+                    WHERE id = ?
+                ''', (agent['id'],))
+                self.conn.commit()
+                print(f"  🚀 Agent run started for {agent['name']} ({task['id']}) (log: {details})")
             
             return True
             

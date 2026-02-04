@@ -6,8 +6,6 @@ Prevents duplicate spawns and handles sessions properly
 
 import os
 import sqlite3
-import json
-import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -17,32 +15,9 @@ DB_PATH = Path(__file__).parent / "team.db"
 
 # Import audit logger
 from audit_log import AuditLogger
+from agent_runtime import get_active_sessions, get_runtime, spawn_agent
 
 audit = AuditLogger()
-
-def get_active_sessions() -> Dict[str, datetime]:
-    """Get currently active agent sessions from OpenClaw"""
-    try:
-        result = subprocess.run(
-            ['openclaw', 'sessions', '--active', '60', '--json'],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout or "{}")
-            active = {}
-            for session in data.get('sessions', []):
-                session_key = session.get('key', '')
-                # Expected format: agent:<agent_id>:<session>
-                parts = session_key.split(':')
-                if len(parts) >= 2 and parts[0] == 'agent':
-                    agent_id = parts[1]
-                    active[agent_id] = datetime.now()
-            return active
-    except Exception as e:
-        print(f"[Warning] Could not get active sessions: {e}")
-    return {}
 
 def get_tasks_to_spawn(task_id: Optional[str] = None) -> List[Dict]:
     """Get tasks that need spawning (assigned, todo, not being worked on)"""
@@ -271,8 +246,7 @@ def log_spawn(task_id: str, agent_id: str):
     audit.log_status_change(agent_id, old_status, 'active', 'Task spawned (waiting for explicit start)')
 
 def spawn_subagent(task: Dict, task_message: str) -> bool:
-    """Run agent via OpenClaw gateway (detached)"""
-    import subprocess
+    """Run agent via configured runtime (detached)."""
     import time
     
     label = f"{task['assignee_id']}-{task['id']}"
@@ -280,43 +254,30 @@ def spawn_subagent(task: Dict, task_message: str) -> bool:
     task_id = task['id']
     working_dir = task.get('working_dir', '/Users/ngs/clawd')
     
-    # Embed label in message since CLI doesn't accept labels
-    spawn_request = f"""[AI-TEAM TASK]
-LABEL: {label}
-WORKING_DIR: {working_dir}
-TASK_ID: {task_id}
-AGENT_ID: {agent_id}
-
-{task_message}
-"""
-
     try:
-        print(f"    📤 Sending task to OpenClaw agent (detached): {agent_id} ...")
+        runtime = get_runtime()
+        print(f"    📤 Sending task to {runtime} agent (detached): {agent_id} ...")
 
         log_dir = Path(__file__).parent / "logs"
         log_dir.mkdir(exist_ok=True)
         log_path = log_dir / f"spawn_{task_id}_{int(time.time())}.log"
 
-        with open(log_path, "w") as logf:
-            proc = subprocess.Popen(
-                ['openclaw', 'agent',
-                 '--agent', agent_id,
-                 '--message', spawn_request,
-                 '--timeout', '3600'],
-                stdout=logf,
-                stderr=logf,
-                text=True,
-                start_new_session=True
-            )
-
-        time.sleep(1)
-        if proc.poll() is not None and proc.returncode != 0:
-            error_msg = f"openclaw agent exited {proc.returncode}; see {log_path}"
-            print(f"    ❌ Failed to start agent: {error_msg}")
+        ok, details = spawn_agent(
+            agent_id=agent_id,
+            task_id=task_id,
+            working_dir=working_dir,
+            message=task_message,
+            log_path=log_path,
+            timeout_seconds=3600,
+            label=label,
+        )
+        if not ok:
+            error_msg = details
+            print(f"    ❌ Failed to start agent: {details}")
             audit.log_spawn(agent_id, task_id, False, error=error_msg)
             return False
 
-        print(f"    ✅ Agent run started (log: {log_path})")
+        print(f"    ✅ Agent run started (log: {details})")
         audit.log_spawn(agent_id, task_id, True, f"pending:{label}")
         return True
         
@@ -335,9 +296,13 @@ def main():
     print(f"🤖 AI Team Spawn Manager (FIXED) - {datetime.now()}")
     print("=" * 60)
     
-    # Get active sessions to avoid duplicates
+    runtime = get_runtime()
+    # Get active sessions to avoid duplicates (runtime-dependent)
     active_agents = get_active_sessions()
-    print(f"Active agent sessions: {len(active_agents)}")
+    if runtime == "openclaw":
+        print(f"Runtime: {runtime} | Active agent sessions: {len(active_agents)}")
+    else:
+        print(f"Runtime: {runtime} | Session query not available (using DB busy-state only)")
     busy_agents = get_busy_agents()
     if busy_agents:
         print(f"Busy agents (DB): {len(busy_agents)}")
