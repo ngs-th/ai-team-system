@@ -343,6 +343,11 @@ CREATE TABLE task_history (
 );
 ```
 
+**Notes (สำคัญ):**
+- `tasks.status` ใน DB ไม่ได้มี CHECK constraint แต่ระบบจะใช้ชุด status ตาม workflow (`backlog`, `todo`, `in_progress`, `review`, `reviewing`, `done`, `blocked`, `info_needed`, `cancelled`)
+- `task_history.action` มี CHECK constraint และ **ไม่ได้รวม** action เฉพาะทางบางอย่าง (เช่น `info_needed`, `reopen`)
+  - ระบบจึงบันทึก transition เหล่านี้เป็น `action='updated'` และใส่รายละเอียดไว้ใน `old_status/new_status/notes`
+
 ### 5.2 Memory Tables
 
 ```sql
