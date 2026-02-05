@@ -1,135 +1,107 @@
 # 🤖 AI Team System
 
-AI Team monitoring and task management system with multi-agent orchestration.
+ระบบบริหารงานแบบ Kanban + spawn agent อัตโนมัติ + workflow รีวิวโค้ดจริง โดยเก็บ state ทั้งหมดไว้ใน SQLite (`team.db`) และมีแดชบอร์ดอ่านอย่างเดียว (`dashboard.php`) เพื่อให้ “สิ่งที่เห็น” ตรงกับ “สิ่งที่เกิดขึ้นจริง”
 
-## 📁 Project Structure
+Timezone มาตรฐานของระบบ: `Asia/Bangkok (UTC+7)`
 
-```
-~/clawd/projects/ai-team/
-├── 📄 Core Files
-│   ├── team_db.py          # CLI tool (Python + SQLite)
-│   ├── dashboard.php       # Web dashboard (PHP)
-│   ├── team.db             # SQLite database (git-lfs tracked)
-│   ├── health_monitor.py   # Health monitoring system
-│   ├── auto_assign.py      # Auto task assignment
-│   └── update-heartbeat.sh # Cron helper
-│
-├── 📁 agents/              # Agent configurations
-│   ├── *.md                # 12 Agent configs (pm, dev, qa, etc.)
-│   ├── spawn-agent.sh      # Agent spawner script
-│   └── templates/          # Task templates
-│       ├── template-prd.md
-│       ├── template-tech-spec.md
-│       ├── template-qa-testplan.md
-│       ├── template-feature-dev.md
-│       └── template-bug-fix.md
-│
-├── 📁 docs/                # Documentation
-│   ├── AI-TEAM-SYSTEM.md       # Full system docs (53KB)
-│   ├── AI-TEAM-SHARED-SYSTEM.md # Shared context
-│   ├── QUICK-REFERENCE.md       # One-page reference
-│   ├── SPAWN-MECHANISM.md       # Spawn modes explained
-│   ├── ARCHIVED-AGENTS-TEAM.md  # Legacy reference
-│   └── architecture/            # System analysis
-│       ├── mission-control-comparison.md
-│       └── system-analysis.md
-│
-└── 📁 cron/
-    └── AI-TEAM-HANDLER.md  # Cron job handlers
-```
+## สิ่งที่ระบบนี้ทำให้ได้ (Expected Outcome)
+
+- แดชบอร์ดสะท้อนความจริงของงานและ session agent
+- งานถูกไล่สถานะตาม workflow: `backlog → todo → in_progress → review → reviewing → done`
+- `blocked` และ `info_needed` เป็น “สถานะจริง” ใน DB และแสดงเป็น attribute (แถบแดงบนการ์ด)
+- prerequisites/acceptance criteria เป็น checklist และใช้เป็น gate ของการ “ปิดงาน” แบบตรวจได้
+- รองรับ runtime หลายแบบผ่าน adapter (`agent_runtime.py`) โดย default คือ `openclaw`
+
+## 📁 โครงสร้างโปรเจกต์ (Project Structure)
+
+โฟลเดอร์หลัก:
+- `team_db.py`: CLI หลัก (Python + SQLite)
+- `dashboard.php`: Kanban dashboard (PHP, read-only)
+- `team.db`: SQLite database (source of truth สำหรับ state)
+- `auto_assign.py`: auto-assign + spawn งานจาก `todo`
+- `spawn_manager_fixed.py`: spawn งานที่ assigned แล้ว + auto-start เพื่อย้ายการ์ดไป Doing
+- `review_manager.py`: spawn reviewer และจัดการสถานะ review/reviewing
+- `agent_reporter.py`: ช่องทางมาตรฐานที่ agent ใช้รายงานกลับ DB
+
+เอกสาร:
+- `docs/AI-TEAM-SYSTEM.md`: Single Source of Truth (สำคัญที่สุด)
+- `docs/TASK-SOP.md`: SOP การสร้าง task ใหม่ (สำหรับ agent/คน)
+- `docs/architecture/`: เอกสารสถาปัตยกรรม/เปรียบเทียบระบบ
 
 ## 🚀 Quick Start
 
-### 1. View Dashboard
+### 1) เปิดแดชบอร์ด
 
 ```bash
-cd ~/clawd/projects/ai-team
+cd /Users/ngs/Herd/ai-team-system
+
+# ถ้าใช้ Herd (แนะนำ): เปิด URL ตรง
+# http://ai-team-system.test/dashboard.php
+
+# หรือรัน php built-in server
 php -S localhost:8080 dashboard.php
-# Open: http://localhost:8080
 ```
 
-### 2. CLI Tool
+### 2) ใช้ CLI
 
 ```bash
-# List all commands
-./team_db.py --help
+# List commands
+python3 team_db.py --help
 
 # List agents
-./team_db.py agent list
+python3 team_db.py agent list
 
 # List tasks
-./team_db.py task list
+python3 team_db.py task list
 
-# Create task with template (working-dir is REQUIRED)
-./team_db.py task create "Implement auth" \
+# Create task (ต้องระบุ working-dir + project + expected/prereq/AC)
+python3 team_db.py task create "Implement auth" \
   --project PROJ-001 \
   --working-dir /Users/ngs/Herd/nurse-ai \
-  --template feature-dev
+  --expected-outcome "User can login/logout and session persists" \
+  --prerequisites "- [ ] HUMAN: ได้รับ API key ของจริง @human\n- [ ] ยืนยัน working_dir = /Users/ngs/Herd/nurse-ai" \
+  --acceptance "- [ ] AC1: Login works\n- [ ] AC2: Logout works"
 
-# Block task (waiting for info)
-./team_db.py task block T-20260202-001 "Waiting for API key from user"
+# ถ้าต้อง “รอข้อมูลจากคน” ให้ใช้ info_needed (ไม่ให้ระบบวนหยิบไปทำ)
+python3 team_db.py task info-needed T-20260202-001 "ต้องมี API key ของจริงจากผู้ใช้"
 
-# Unblock and resume
-./team_db.py task unblock T-20260202-001
+# คนเป็นผู้ติ๊ก HUMAN-only prerequisites
+python3 team_db.py task check T-20260202-001 --field prerequisites --index 1 --done --actor human
 ```
 
-### 3. Spawn Agent
+### 3) ให้ระบบ spawn agent ทำงาน
 
 ```bash
-# Mode A: Database Queue (default) - Agent picks up via heartbeat
-./agents/spawn-agent.sh pm "Define roadmap Q1"
+# Auto-assign + spawn (รันครั้งเดียว)
+python3 auto_assign.py --run
 
-# Mode B: Immediate Spawn - Start working immediately
-./agents/spawn-agent.sh pm "Urgent bug fix" --spawn
+# Spawn งานที่ถูก assign แล้ว (รันครั้งเดียว)
+python3 spawn_manager_fixed.py
 
-# With template
-./agents/spawn-agent.sh dev "Build API" --template tech-spec
+# Review manager (รันครั้งเดียว)
+python3 review_manager.py --verbose
 ```
 
 ## 📊 Features
 
-- **Multi-Agent System:** 12 specialized agents (PM, Dev, QA, UX, etc.)
-- **Task Management:** Create, assign, track tasks with SQLite
-- **Task Statuses:** backlog → todo → in_progress → review → done + blocked
-- **Templates:** PRD, Tech Spec, QA Test Plan, Feature Dev, Bug Fix
-- **Dashboard:** Real-time PHP dashboard with auto-refresh
-- **Health Monitoring:** Cron-based monitoring with Telegram alerts
-- **Two Spawn Modes:** Database Queue (default) or Immediate Spawn
+- **Kanban Board:** Backlog / Todo / Doing / Waiting for Review / Reviewing / Done
+- **Review Workflow จริง:** reviewer ต้องอ่านโค้ดและติ๊ก AC ก่อน approve
+- **HUMAN-only prerequisites:** กัน agent “ติ๊กผ่านเอง” เรื่อง key/secret ของจริง
+- **Dashboard truth:** จุดเขียวกระพริบ = agent `active` และทำ task นี้จริง
+- **Bangkok time:** ทุก timestamp ใช้ `localtime` (+7)
 
 ## 📚 Documentation
 
-| Document | Description |
-|----------|-------------|
-| [docs/AI-TEAM-SYSTEM.md](docs/AI-TEAM-SYSTEM.md) | Complete system documentation |
-| [docs/QUICK-REFERENCE.md](docs/QUICK-REFERENCE.md) | One-page quick reference |
-| [docs/SPAWN-MECHANISM.md](docs/SPAWN-MECHANISM.md) | Spawn modes explained |
-| [docs/architecture/](docs/architecture/) | System analysis & comparisons |
+- `docs/AI-TEAM-SYSTEM.md`: Single Source of Truth
+- `docs/TASK-SOP.md`: SOP การสร้าง task ใหม่
+- `docs/QUICK-REFERENCE-CARD.md`: คำสั่งหลักแบบสั้น
+- `docs/architecture/`: เอกสารเปรียบเทียบ/สถาปัตยกรรม
 
 ## 🗄️ Database
 
 Location: `team.db` (SQLite)
 
-**Tables:**
-- `agents` - Team members & status
-- `projects` - Project definitions
-- `tasks` - Task records with requirements, working_dir, blocked_reason
-- `task_history` - Activity log
-- `task_dependencies` - Dependency graph
-
-**Views:**
-- `v_dashboard_stats` - Pre-calculated stats
-- `v_project_status` - Project progress
-- `v_agent_status` - Agent health status
-- `v_task_summary` - Task summaries
-
-## 🔄 Spawn Modes
-
-| Mode | Command | When to Use |
-|------|---------|-------------|
-| **A - DB Queue** | `./spawn-agent.sh pm "Task"` | Normal tasks, background work |
-| **B - Immediate** | `./spawn-agent.sh pm "Task" --spawn` | Urgent bugs, user waiting |
-
-See [docs/SPAWN-MECHANISM.md](docs/SPAWN-MECHANISM.md) for details.
+ERD: `docs/architecture/ERD.md`
 
 ## 📝 Templates
 
@@ -137,10 +109,10 @@ Available task templates:
 
 ```bash
 # List templates
-./team_db.py task template list
+python3 team_db.py task template list
 
 # Create task from template
-./team_db.py task template create prd "My Feature" --project PROJ-001
+python3 team_db.py task template create prd "My Feature" --project PROJ-001
 ```
 
 | Template | Purpose |
@@ -198,26 +170,10 @@ All alerts sent to Telegram.
 
 ## 🔧 Requirements
 
-- PHP 8.0+ (with SQLite3 extension)
+- PHP 8+ (พร้อม SQLite3 extension) หรือ Herd
 - Python 3.8+
-- SQLite3
-- Git LFS (for `team.db`)
-
-```bash
-# Install git-lfs
-brew install git-lfs
-git lfs install
-git lfs pull
-```
-
-## 📦 No Dependencies
-
-- Pure PHP (built-in SQLite3)
-- No frameworks
-- No composer packages
-- Single-file dashboard
+- `openclaw` CLI (ถ้าจะให้ runtime ทำงานจริง)
 
 ---
 
-**Version:** 3.5.0  
-**Last Updated:** 2026-02-03
+**Last Updated:** 2026-02-05

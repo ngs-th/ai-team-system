@@ -745,6 +745,14 @@ python3 agent_comm_hub.py --send "agent_id:Message"
 
 ## 14. Recent Changes
 
+---
+
+## Task SOP (สำคัญ)
+
+สำหรับการสร้าง task ใหม่ให้ workflow ทำงานได้จริง ให้ยึดเอกสารนี้:
+- `docs/TASK-SOP.md`
+
+
 ### v4.1.3 (2026-02-05) - Runtime Adapter (OpenClaw / Claude Code)
 
 **Changes:**
