@@ -509,14 +509,16 @@ python3 agent_reporter.py complete \
 
 ## 8. Cron Jobs
 
-| Job | Schedule | Purpose | Status |
-|-----|----------|---------|--------|
-| **AI Team Spawn** | ทุก 5 นาที | Spawn subagents for todo tasks | ✅ Active |
-| **AI Team Agent Sync** | ทุก 5 นาที | Detect and reset stale agents | ✅ Active |
-| **AI Team Log Bridge** | ทุก 2 นาที | Parse logs → update progress/complete | ✅ Active |
-| **AI Team Auto-Assign** | ทุก 5 นาที | Assign idle agents to todo | ✅ Active |
-| **AI Team Auto-Review** | ทุก 5 นาที | Spawn reviewer + manage review queue | ✅ Active |
-| **AI Team Retry Queue** | ทุก 10 นาที | Retry failed operations | ✅ Active |
+ตารางนี้เป็น “ค่าที่แนะนำ/ค่าที่คาดหวัง” (การตั้ง cron จริงอยู่นอก repo)
+
+| Job | Typical Schedule | Purpose |
+|-----|------------------|---------|
+| **AI Team Spawn** | ทุก 5 นาที | Spawn subagents for todo tasks |
+| **AI Team Agent Sync** | ทุก 5 นาที | Detect and reset stale agents |
+| **AI Team Log Bridge** | ทุก 2 นาที | Parse logs → update progress/complete |
+| **AI Team Auto-Assign** | ทุก 5 นาที | Assign idle agents to todo |
+| **AI Team Auto-Review** | ทุก 5 นาที | Spawn reviewer + manage review queue |
+| **AI Team Retry Queue** | ทุก 10 นาที | Retry failed operations |
 
 **Auto-Assign Behavior:**
 - Assign **unassigned** `todo` tasks to idle agents
