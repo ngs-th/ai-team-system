@@ -51,7 +51,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     AI Team System v4.1                          │
+│                     AI Team System v4.2                          │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐    │
@@ -255,92 +255,134 @@ python3 team_db.py task check <task_id> --field prerequisites --index <n> --done
 
 ## 5. Database System (team.db)
 
-### 5.1 Core Tables
+### 5.1 Core Tables (Schema Snapshot From `team.db`)
+
+หมายเหตุสำคัญ:
+- `team.db` เป็น source of truth จริงของ runtime state
+- สคีมาบางจุด “ไม่ได้บังคับด้วย CHECK constraint” (เช่น `tasks.status`) แต่โค้ดของระบบจะใช้ค่า status ตาม workflow ที่กำหนด
+- SQLite `CURRENT_TIMESTAMP` เป็น UTC เสมอ ดังนั้นบางคอลัมน์ที่มี default เป็น `CURRENT_TIMESTAMP` จะเป็นเวลา UTC ถ้ามี insert ที่ไม่ set เอง
+  - โค้ดส่วนใหญ่ของระบบจะเขียน timestamp ด้วย `datetime('now', 'localtime')` (Bangkok) และ dashboard แสดงผลเป็น Bangkok
+  - **ห้ามพึ่ง default เวลา** สำหรับ logic ที่ต้องแม่นยำ ให้ set ด้วย `localtime` จาก code เสมอ
 
 ```sql
--- Tasks
+-- tasks (from sqlite_master)
 CREATE TABLE tasks (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT,
     project_id TEXT,
     assignee_id TEXT,
-    status TEXT DEFAULT 'todo' CHECK (status IN ('backlog', 'todo', 'in_progress', 'review', 'reviewing', 'done', 'blocked', 'info_needed', 'cancelled')),
+    status TEXT DEFAULT 'todo',
     blocked_reason TEXT,
     priority TEXT DEFAULT 'normal',
     progress INTEGER DEFAULT 0,
-    review_feedback TEXT,
-    review_feedback_at DATETIME,
-    actual_duration_minutes INTEGER,
-    fix_loop_count INTEGER DEFAULT 0,
-    prerequisites TEXT,                 -- MANDATORY via app validation
-    acceptance_criteria TEXT,           -- MANDATORY via app validation
-    expected_outcome TEXT,              -- MANDATORY via app validation
-    working_dir TEXT,                   -- MANDATORY via app validation
-    runtime TEXT,                       -- openclaw | claude_code (last spawn)
-    runtime_at DATETIME,
-    created_at DATETIME,
+    estimated_hours REAL,
+    actual_hours REAL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     started_at DATETIME,
     completed_at DATETIME,
+    due_date DATETIME,
     updated_at DATETIME,
+    blocked_by TEXT,
+    notes TEXT,
+    actual_duration_minutes INTEGER,
+    fix_loop_count INTEGER DEFAULT 0,
+    prerequisites TEXT,
+    acceptance_criteria TEXT,
+    expected_outcome TEXT,
+    working_dir TEXT,
     backlog_at DATETIME,
     todo_at DATETIME,
     in_progress_at DATETIME,
     review_at DATETIME,
     reviewing_at DATETIME,
     done_at DATETIME,
-    blocked_at DATETIME
+    blocked_at DATETIME,
+    review_feedback TEXT,
+    review_feedback_at DATETIME,
+    runtime TEXT,
+    runtime_at DATETIME,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL,
+    FOREIGN KEY (assignee_id) REFERENCES agents(id) ON DELETE SET NULL
 );
 
--- Agents
+-- agents (from sqlite_master)
 CREATE TABLE agents (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     role TEXT NOT NULL,
     model TEXT,
-    status TEXT DEFAULT 'idle',
+    status TEXT DEFAULT 'idle' CHECK (status IN ('idle', 'active', 'blocked', 'offline')),
     current_task_id TEXT,
     last_heartbeat DATETIME,
     total_tasks_completed INTEGER DEFAULT 0,
     total_tasks_assigned INTEGER DEFAULT 0,
-    notification_level TEXT DEFAULT 'normal',
-    health_status TEXT DEFAULT 'unknown'
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    health_status TEXT DEFAULT 'unknown' CHECK (health_status IN ('healthy', 'stale', 'offline', 'unknown')),
+    last_alert_sent DATETIME,
+    last_alert_type TEXT,
+    notification_level TEXT DEFAULT 'normal' CHECK (notification_level IN ('minimal', 'normal', 'verbose')),
+    FOREIGN KEY (current_task_id) REFERENCES tasks(id) ON DELETE SET NULL
+);
+
+-- task_history (from sqlite_master)
+CREATE TABLE task_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    agent_id TEXT,
+    action TEXT NOT NULL CHECK (action IN ('created', 'assigned', 'started', 'updated', 'completed', 'blocked', 'unblocked', 'cancelled', 'approved', 'rejected', 'backlogged', 'auto_stopped')),
+    old_status TEXT,
+    new_status TEXT,
+    old_progress INTEGER,
+    new_progress INTEGER,
+    notes TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL
 );
 ```
 
 ### 5.2 Memory Tables
 
 ```sql
--- Long-term Memory (CLAUDE.md equivalent)
+-- agent_context (from sqlite_master)
 CREATE TABLE agent_context (
-    agent_id TEXT PRIMARY KEY,
-    context TEXT DEFAULT '',      -- Role & responsibilities
-    learnings TEXT DEFAULT '',    -- Accumulated knowledge
-    preferences TEXT DEFAULT '',  -- Personal settings
-    last_updated DATETIME
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL UNIQUE,
+    context TEXT NOT NULL DEFAULT '',
+    learnings TEXT DEFAULT '',
+    preferences TEXT DEFAULT '',
+    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
 );
 
--- Short-term Memory (WORKING.md equivalent)
+-- agent_working_memory (from sqlite_master)
 CREATE TABLE agent_working_memory (
-    id INTEGER PRIMARY KEY,
-    agent_id TEXT NOT NULL,          -- indexed (non-unique)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL,
     current_task_id TEXT,
     working_notes TEXT DEFAULT '',
     blockers TEXT DEFAULT '',
     next_steps TEXT DEFAULT '',
-    last_updated DATETIME
+    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+    FOREIGN KEY (current_task_id) REFERENCES tasks(id) ON DELETE SET NULL
 );
 
--- Inter-Agent Communication
+-- agent_communications (from sqlite_master)
 CREATE TABLE agent_communications (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     from_agent_id TEXT NOT NULL,
     to_agent_id TEXT,
     task_id TEXT,
     message TEXT NOT NULL,
     message_type TEXT CHECK (message_type IN ('comment', 'mention', 'request', 'response')),
     is_read BOOLEAN DEFAULT FALSE,
-    created_at DATETIME
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (from_agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+    FOREIGN KEY (to_agent_id) REFERENCES agents(id) ON DELETE SET NULL,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 
 -- Audit Log (NEW in v4.0)
@@ -417,8 +459,10 @@ Agents MUST report their status back to the main system using `agent_reporter.py
 | `complete` | When agent finishes task | status=idle, task=review |
 | `status` | General status update | Updates agent status |
 
-**หมายเหตุสำคัญ:** `agent_reporter.py start` จะตรวจ **Prerequisites checklist**  
-ถ้าไม่ครบ ระบบจะ reject งานกลับ `todo` (priority=`high`) และคืน agent เป็น `idle`
+**หมายเหตุสำคัญ:** `agent_reporter.py start` (ผ่าน `team_db.py start_task()`) จะ
+- ตรวจว่า `prerequisites` เป็น “checklist format” ได้จริง (ไม่ใช่ข้อความลอย ๆ)
+- **ไม่บังคับ** ให้ติ๊ก prerequisites ครบก่อน start (เริ่มได้เพื่อให้ agent ตรวจ prereq ทีละข้อ)
+- งานจะถูก gate ตอน `task done` / `review_manager.py` / `task approve` แทน
 
 ### 7.2 Usage
 
@@ -428,8 +472,11 @@ python3 agent_reporter.py start \
   --agent pm \
   --task T-20260202-001
 
-# (Required) mark prerequisites checklist before start
+# ตรวจ prerequisites ทีละข้อ (แนะนำให้ทำก่อนเริ่มแก้โค้ดจริง)
 python3 team_db.py task check T-20260202-001 --field prerequisites --index 1 --done
+
+# HUMAN-only prerequisite (ต้องเป็นคน)
+python3 team_db.py task check T-20260202-001 --field prerequisites --index 2 --done --actor human
 
 # Send heartbeat (every 30 minutes MANDATORY)
 python3 agent_reporter.py heartbeat --agent pm
@@ -451,7 +498,8 @@ python3 agent_reporter.py complete \
 ### 7.3 Stale Agent Detection
 
 **Agent Sync** (cron every 5 minutes) automatically:
-1. ตรวจสัญญาณ runtime (session ถ้าเป็น OpenClaw, heartbeat ถ้า runtime อื่น)
+1. ตรวจสัญญาณ runtime (OpenClaw: session OR heartbeat, runtime อื่น: heartbeat)
+   - เกณฑ์ “active” ปัจจุบัน: ภายใน ~20 นาทีล่าสุด (ดู `agent_sync.py:SESSION_ACTIVE_MINUTES`)
 2. รีเซ็ต agent ที่ไม่ active → `idle`
 3. ถ้ามีงานค้างใน `in_progress` → ย้ายกลับ `todo` (ไม่ block)
 4. ถ้ามีงานค้างใน `reviewing` และ reviewer หาย → ย้ายกลับ `review` (Waiting for Review)
@@ -474,11 +522,14 @@ python3 agent_reporter.py complete \
 - Assign **unassigned** `todo` tasks to idle agents
 - ถ้ามีงาน `todo` ที่ **ถูก assign แล้ว** แต่ agent ยัง idle → จะ **re-dispatch** งานนั้น (กันงานค้างไม่เริ่ม)
 - เคลียร์ `current_task_id` ที่ค้างผิด state (เช่น agent idle แต่ชี้งานที่ไม่ใช่ `todo`)
+- หลัง spawn สำเร็จ ระบบจะพยายาม `task start` อัตโนมัติ เพื่อย้ายการ์ดไป Doing (`todo` → `in_progress`)
 
 **Auto-Review Behavior:**
 - ไม่ auto-approve
 - เลือก reviewer จาก pool (`qa`, `qa-2`, `qa-3`, `qa-4` หรือกำหนดด้วย `AI_TEAM_REVIEWERS`)
-- ตรวจ `prerequisites` ก่อนรีวิว: ถ้ายังมี `[ ]` จะไม่เริ่มรีวิว และย้ายกลับ `todo`
+- ตรวจ `prerequisites` ก่อนรีวิว:
+  - ถ้ายังมี `[ ]` และเป็น HUMAN-only → mark เป็น `info_needed` (ต้องรอคน)
+  - ถ้ายังมี `[ ]` (ทั่วไป) → return กลับ `todo` พร้อม `review_feedback`
 - เปลี่ยน `review` → `reviewing` และสั่ง reviewer ตรวจจริง
 - ถ้า reviewer ไม่มี active session จะถูก reset อัตโนมัติ และงานจะกลับ `review` (Waiting for Review) เพื่อไม่ให้ค้างใน Reviewing
 
@@ -493,15 +544,15 @@ Check for each task:
   - Has working_dir?
   - working_dir exists?
   - Agent not busy (DB/session)
-  - Not spawned recently (>10 min)?
+  - Not spawned recently (ดูจาก `tasks.runtime_at` ภายใน ~10 นาที)?
     ↓
 Spawn subagent via Runtime Adapter
   - Log to audit_log
     ↓
-Update database:
-  - agent.status = active
-  - agent.current_task_id = task
-  - task.status คงเป็น `todo` จนกว่า agent จะสั่ง `task start` / `agent_reporter.py start`
+Auto-start (ย้ายการ์ดไป Doing):
+  - `todo` → `in_progress`
+  - agent.status → `active`
+  - agent.current_task_id → task
 ```
 
 ---
@@ -510,7 +561,7 @@ Update database:
 
 ### 9.1 Overview
 
-All significant events are logged to `audit_log` table and `logs/audit.log` file:
+All significant events are logged to `audit_log` table and (optional runtime file) `logs/audit.log`:
 
 | Event Type | Description |
 |------------|-------------|
@@ -597,7 +648,7 @@ python3 team_db.py agent comm read <message_id>
 |------|---------|
 | `team_db.py` | Main CLI tool for tasks, agents, notifications |
 | `agent_runtime.py` | Runtime adapter สำหรับ spawn agent (`openclaw`/`claude_code`) |
-| `spawn_manager_fixed.py` | Spawn subagents และผูก agent/task โดยไม่บังคับ in_progress |
+| `spawn_manager_fixed.py` | Spawn subagents สำหรับ task ที่ assigned แล้ว และ auto-start เพื่อย้ายการ์ดไป Doing |
 | `agent_reporter.py` | Agents report status back to system |
 | `agent_sync.py` | Detect and reset stale agents |
 | `log_bridge.py` | Parse agent logs → update DB progress/complete |
@@ -660,14 +711,26 @@ python3 team_db.py task create "Title" \
 # Start working
 python3 team_db.py task start <task_id>
 
+# Human-only prerequisite (must be checked by a human)
+python3 team_db.py task check <task_id> --field prerequisites --index <n> --done --actor human
+
 # Update progress
 python3 team_db.py task progress <task_id> <percent>
 
 # Complete (sends to review)
 python3 team_db.py task done <task_id>
 
+# If prerequisites are not met during work: return to todo with a detailed reason (no blocked)
+python3 team_db.py task requeue <task_id> --reason "Prerequisite not met: <detail>"
+
+# If we need human input (e.g., real API key): mark info_needed to stop auto-assign loops
+python3 team_db.py task info-needed <task_id> "Need <missing info> from human"
+
 # Approve (moves to done)
 python3 team_db.py task approve <task_id> --reviewer qa
+
+# Reopen a done task back to todo
+python3 team_db.py task reopen <task_id> --reason "Why we need more work"
 
 # Check prerequisites/acceptance (1-by-1)
 python3 team_db.py task check <task_id> --field prerequisites --index <n> --done
@@ -681,6 +744,10 @@ python3 team_db.py task unblock <task_id> --agent <agent_id>
 python3 team_db.py task list --status in_progress
 python3 team_db.py task list --status reviewing
 python3 team_db.py task list --agent dev
+
+# Note: tasks.status supports `info_needed` but `task list --status` does not include it yet.
+# Use dashboard or a DB query:
+# sqlite3 team.db "SELECT id, title, blocked_reason FROM tasks WHERE status='info_needed' ORDER BY updated_at DESC;"
 ```
 
 ### Agent Management
@@ -753,6 +820,20 @@ python3 agent_comm_hub.py --send "agent_id:Message"
 - `docs/TASK-SOP.md`
 
 
+### v4.2.0 (2026-02-05) - Workflow Reality + Dashboard Truth
+
+**Changes:**
+- ✅ เพิ่มสถานะ `info_needed` สำหรับงานที่ “ต้องรอคน” (เช่น API key/secret ของจริง) เพื่อหยุดการวนหยิบไปทำ
+- ✅ เพิ่ม HUMAN-only prerequisites marker: `HUMAN:` / `@human` / `🔒`
+  - Agent ห้ามติ๊กเอง
+  - คนต้องติ๊กด้วย `python3 team_db.py task check ... --actor human`
+- ✅ ปรับการนับ fix loop: การ reject/return ที่เป็นเรื่อง prerequisites/working memory จะ **ไม่เพิ่ม** `fix_loop_count` (กัน AUTO-STOP ผิด ๆ)
+- ✅ ปรับ review_manager:
+  - reconcile completed → review เฉพาะงาน `in_progress` (ไม่ดึง `todo` ที่หลงค่า progress/completed_at)
+  - ถ้า prerequisites ที่ไม่ครบเป็น HUMAN-only → mark เป็น `info_needed`
+  - ไม่ auto-requeue งานเพียงเพราะ “ไม่มี working memory ล่าสุด” (ให้ reviewer ทำงานจริง)
+- ✅ Dashboard แสดงจุดเขียวกระพริบเมื่อ agent `status=active` และ `current_task_id` ตรงกับการ์ดเท่านั้น (ไม่เดาจาก heartbeat)
+
 ### v4.1.3 (2026-02-05) - Runtime Adapter (OpenClaw / Claude Code)
 
 **Changes:**
@@ -767,8 +848,8 @@ python3 agent_comm_hub.py --send "agent_id:Message"
 **Changes:**
 - ✅ แก้ flow ให้ prerequisite validation fail = `rejected -> todo` (ไม่ติด blocked)
 - ✅ เคลียร์ `blocked_reason/blocked_at` อัตโนมัติเมื่อ task เข้า `in_progress/review/reviewing/done`
-- ✅ Dashboard ตีความ blocked จาก `status=blocked` เท่านั้น (ไม่ปนกับ review rejection)
-- ✅ Agent prompt ปรับให้ unmet prerequisites ใช้ `task reject --reason ...` แทน `task block`
+- ✅ Dashboard ตีความ blocked จาก `status in (blocked, info_needed)` เท่านั้น (ไม่ปนกับ review rejection)
+- ✅ Agent prompt ปรับให้ unmet prerequisites ใช้ `task requeue --reason ...` (ไม่ใช้ `task block`)
 
 ### v4.1.1 (2026-02-04) - Doc Sync + Workflow Gate Alignment
 
@@ -786,7 +867,7 @@ python3 agent_comm_hub.py --send "agent_id:Message"
 - ✅ **Reviewing Status** (`review` → `reviewing` → `done`)
 - ✅ **Review Feedback** เก็บเหตุผลลง `review_feedback`
 - ✅ **Checklist Enforcement**
-  - Prerequisites ต้องติ๊กครบก่อน start
+  - Prerequisites ต้องติ๊กครบก่อน `complete/review/approve` (start อนุญาตเพื่อให้ agent ตรวจ prereq ทีละข้อ)
   - Acceptance Criteria ต้องติ๊กครบก่อน approve
 - ✅ **Status Timestamps** (`todo_at`, `review_at`, `reviewing_at`, `done_at`, ฯลฯ)
 - ✅ **Log Bridge** อ่าน log แล้วอัปเดต progress/complete
@@ -842,7 +923,5 @@ python3 agent_comm_hub.py --send "agent_id:Message"
 
 ---
 
-**Last Updated:** 2026-02-04 11:56 PM  
-**Maintainer:** Orchestrator Agent  
-**Version:** 4.1.1  
-**Next Review:** 2026-03-04
+**Last Updated:** 2026-02-05  
+**Version:** 4.2.0
