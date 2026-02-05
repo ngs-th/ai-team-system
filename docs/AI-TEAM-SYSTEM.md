@@ -1,8 +1,8 @@
 # 🤖 AI Team System
 
-**Version:** 4.1.1  
+**Version:** 4.2.0  
 **Created:** 2026-02-01  
-**Updated:** 2026-02-04  
+**Updated:** 2026-02-05  
 **Status:** Active  
 **Based on:** Sengdao2 BMAD Agent Pattern + Multi-Agent Standby System
 
@@ -154,7 +154,7 @@
 ```
 backlog → todo → in_progress → review → reviewing → done
 
-blocked = สถานะจริงใน DB และแสดงเป็น attribute (แถบแดง) บนการ์ด
+`blocked`/`info_needed` = สถานะจริงใน DB และแสดงเป็น attribute (แถบแดง) บนการ์ด
 ```
 
 **Dashboard Columns:** Backlog / Todo / Doing / Waiting for Review / Reviewing / Done  
@@ -168,6 +168,7 @@ blocked = สถานะจริงใน DB และแสดงเป็น
 | **todo** | พร้อมเริ่ม รอ assign | Auto-assign ทุก 10 นาที |
 | **in_progress** | กำลังทำ | Agent ต้องสั่ง `task start` หรือ `agent_reporter.py start` |
 | **blocked** | ติดปัญหา | `task block <id> "reason"` |
+| **info_needed** | รอข้อมูลจากคน (เช่น API key ของจริง) | `task info-needed <id> "รายละเอียด"` |
 | **review** | รอเริ่มตรวจ | `task done <id>` (auto → review) |
 | **reviewing** | กำลังตรวจงานจริง | `review_manager.py` เริ่ม reviewer |
 | **done** | เสร็จสมบูรณ์ | `task approve <id> --reviewer <qa>` |
@@ -176,23 +177,45 @@ blocked = สถานะจริงใน DB และแสดงเป็น
 (`Reviewing` = สถานะจริงใน DB)
 
 **กติกาแสดง blocked ใน Dashboard (ล่าสุด):**
-- การ์ดจะติดธง blocked เฉพาะเมื่อ `status=blocked`
-- งานที่ `rejected` (เช่น prerequisites ไม่ครบ) จะกลับ `todo` และเก็บเหตุผลใน `review_feedback` ไม่ใช้ `blocked_reason`
+- การ์ดจะติดธง blocked เฉพาะเมื่อ `status=blocked` หรือ `status=info_needed`
+- งานที่ `rejected/returned` (เช่น prerequisites ไม่ครบ) จะกลับ `todo` และเก็บเหตุผลใน `review_feedback` ไม่ใช้ `blocked_reason`
 - การ์ด blocked จะถูกเรียงไว้บนสุดของคอลัมน์ปัจจุบัน และไม่อยู่คอลัมน์ Done
 
 **Reject Flow:** เมื่อรีวิวไม่ผ่าน → กลับ `todo` + `priority=high` + เก็บ `review_feedback` เพื่อให้ผู้แก้เห็นเหตุผลทันที
+
+### 4.1.1 Sprint Status Sync (Nurse AI)
+
+ระบบจะ sync สถานะของ story ไปยัง  
+`/Users/ngs/Herd/nurse-ai/_bmad-output/implementation-artifacts/sprint-status.yaml`
+
+**Mapping สถานะ**
+- `backlog` → backlog (รอดำเนินการ)
+- `todo` → ready (พร้อมพัฒนา)
+- `in_progress` → in-progress (กำลังทำ)
+- `review`/`reviewing` → review (รีวิว)
+- `done` → done (เสร็จสิ้น)
+
+**เมื่อไหร่ที่ sync:**
+- เริ่มงาน (`start_task`) → in-progress
+- ส่งรีวิว (`task done`/`send_to_review`) → review
+- อนุมัติ (`approve`) → done
+- ปฏิเสธ (`reject`/validation fail) → ready
+- ส่ง back to backlog → backlog
 
 ### 4.2 Task Completion Flow
 
 1. **Spawn Manager** detects todo task with assignee → Spawns subagent
 2. **Agent** เริ่มงาน → `agent_reporter.py start`
-   - ตรวจ **Prerequisites checklist** ถ้าไม่ครบ → **rejected → todo (priority=high)**
+   - เริ่มงานได้แม้ prerequisites ยังไม่ครบ (เพื่อให้ agent ตรวจและติ๊กทีละข้อ)
+   - ถ้าเจอ prerequisite ที่ “ทำต่อไม่ได้” → `task requeue` พร้อมเหตุผลที่ละเอียด (ไม่ block)
+   - ถ้า prerequisite เป็น **HUMAN-only** (เช่น `@human`) และยังไม่ครบ → `task info-needed` แล้วหยุด (ไม่วน auto-assign)
 3. **Agent** ทำงาน → `agent_reporter.py heartbeat` ทุก 30 นาที
 4. **Agent** เสร็จ → `agent_reporter.py complete` → Status=review  
    - **ต้องเป็น in_progress เท่านั้น** (ห้าม complete จาก todo)
    - ถ้า **Prerequisites checklist** ยังไม่ครบ → **rejected → todo (priority=high)** (ห้ามเข้า review)
 5. **Review Manager** สั่ง reviewer ตรวจจริง → Status=reviewing
-   - ตรวจ **Prerequisites checklist** ซ้ำก่อนเริ่มรีวิว ถ้าไม่ครบ → ย้ายกลับ `todo`
+   - ถ้ารีวิวแล้วเจอ prerequisites ไม่ครบ → return กลับ `todo` + feedback ชัดเจน (ไม่ block)
+   - ถ้าเป็น **HUMAN-only prerequisites** → mark เป็น `info_needed` (ต้องรอคน)
 6. **Reviewer** ต้องเช็ค **Acceptance Criteria checklist** ครบทุกข้อ
 7. **Approve** → Status=done  
    **Reject** → Status=todo + priority=high + review feedback
@@ -211,13 +234,21 @@ python3 team_db.py task create "Title" \
 ```
 
 **บังคับใช้ Checklist จริง:**
-- **Prerequisites** ต้องเป็น checklist และต้องถูกติ๊กครบก่อนเริ่มงาน  
+- **Prerequisites** ต้องเป็น checklist และต้องถูกติ๊กครบก่อน “complete/review/approve”  
 - **Acceptance Criteria** ต้องเป็น checklist และต้องถูกติ๊กครบก่อนอนุมัติ
+
+**HUMAN-only prerequisites (ของจริงจากคน):**
+- ใส่ marker ใน item เช่น `HUMAN:` หรือ `@human` หรือ `🔒`
+- Agent **ห้าม** ติ๊ก item นี้เอง
+- คนเป็นผู้ติ๊กด้วย `--actor human`
 
 เช็คทีละข้อ:
 ```bash
 python3 team_db.py task check <task_id> --field prerequisites --index <n> --done
 python3 team_db.py task check <task_id> --field acceptance --index <n> --done
+
+# HUMAN-only prerequisite (ต้องเป็นคน)
+python3 team_db.py task check <task_id> --field prerequisites --index <n> --done --actor human
 ```
 
 ---
@@ -234,7 +265,7 @@ CREATE TABLE tasks (
     description TEXT,
     project_id TEXT,
     assignee_id TEXT,
-    status TEXT DEFAULT 'todo' CHECK (status IN ('backlog', 'todo', 'in_progress', 'review', 'reviewing', 'done', 'blocked', 'cancelled')),
+    status TEXT DEFAULT 'todo' CHECK (status IN ('backlog', 'todo', 'in_progress', 'review', 'reviewing', 'done', 'blocked', 'info_needed', 'cancelled')),
     blocked_reason TEXT,
     priority TEXT DEFAULT 'normal',
     progress INTEGER DEFAULT 0,
@@ -435,9 +466,14 @@ python3 agent_reporter.py complete \
 | **AI Team Spawn** | ทุก 5 นาที | Spawn subagents for todo tasks | ✅ Active |
 | **AI Team Agent Sync** | ทุก 5 นาที | Detect and reset stale agents | ✅ Active |
 | **AI Team Log Bridge** | ทุก 2 นาที | Parse logs → update progress/complete | ✅ Active |
-| **AI Team Auto-Assign** | ทุก 10 นาที | Assign idle agents to todo | ✅ Active |
+| **AI Team Auto-Assign** | ทุก 5 นาที | Assign idle agents to todo | ✅ Active |
 | **AI Team Auto-Review** | ทุก 5 นาที | Spawn reviewer + manage review queue | ✅ Active |
 | **AI Team Retry Queue** | ทุก 10 นาที | Retry failed operations | ✅ Active |
+
+**Auto-Assign Behavior:**
+- Assign **unassigned** `todo` tasks to idle agents
+- ถ้ามีงาน `todo` ที่ **ถูก assign แล้ว** แต่ agent ยัง idle → จะ **re-dispatch** งานนั้น (กันงานค้างไม่เริ่ม)
+- เคลียร์ `current_task_id` ที่ค้างผิด state (เช่น agent idle แต่ชี้งานที่ไม่ใช่ `todo`)
 
 **Auto-Review Behavior:**
 - ไม่ auto-approve
@@ -588,11 +624,18 @@ export AI_TEAM_AGENT_RUNTIME=openclaw
 # Switch to Claude Code runtime
 export AI_TEAM_AGENT_RUNTIME=claude_code
 
-# Optional: custom command (default: "claude code")
-export AI_TEAM_CLAUDE_CMD="claude code"
+# Optional: custom command (default: /Users/ngs/.local/bin/claude if exists, else "claude")
+export AI_TEAM_CLAUDE_CMD="/Users/ngs/.local/bin/claude"
 
 # Advanced: full template with placeholders {agent_id} {message} {timeout}
-export AI_TEAM_CLAUDE_CMD_TEMPLATE='claude code --agent {agent_id} --message "{message}" --timeout {timeout}'
+export AI_TEAM_CLAUDE_CMD_TEMPLATE='claude -p "$AI_TEAM_MESSAGE"'
+
+# ถ้าใช้ Node LTS แยก (เช่น node@20) และต้องบังคับ HOME/CONFIG:
+export AI_TEAM_CLAUDE_CMD_TEMPLATE='bash -lc "HOME=/Users/ngs/Herd/ai-team-system/.claude XDG_CONFIG_HOME=/Users/ngs/Herd/ai-team-system/.config /opt/homebrew/opt/node@20/bin/node /usr/local/bin/claude -p --dangerously-skip-permissions --add-dir \\"$AI_TEAM_WORKING_DIR\\" --permission-mode bypassPermissions \\"$AI_TEAM_MESSAGE\\""'
+
+# Force runtime ผ่านไฟล์ในโปรเจกต์ (มีผลเหนือ env)
+echo openclaw > runtime.override
+# ลบไฟล์เพื่อกลับไปใช้ค่าจาก env
 ```
 
 **หมายเหตุ:** ถ้า runtime ไม่รองรับ session API, ระบบจะใช้ `last_heartbeat` เป็นสัญญาณ liveness แทน

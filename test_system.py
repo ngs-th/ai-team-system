@@ -9,8 +9,13 @@ import sqlite3
 import subprocess
 from datetime import datetime
 from pathlib import Path
+import time
 
 os.environ['TZ'] = 'Asia/Bangkok'
+try:
+    time.tzset()
+except AttributeError:
+    pass
 DB_PATH = Path(__file__).parent / "team.db"
 
 def test_database_schema():
@@ -47,7 +52,8 @@ def test_task_workflow():
         '--project', 'PROJ-TEST',
         '--expected-outcome', 'Test workflow',
         '--prerequisites', '- [ ] None',
-        '--acceptance', '- [ ] Test passes'
+        '--acceptance', '- [ ] Test passes',
+        '--working-dir', '/Users/ngs/Herd/ai-team-system'
     ], capture_output=True, text=True, cwd='/Users/ngs/Herd/ai-team-system')
     
     if result.returncode != 0:

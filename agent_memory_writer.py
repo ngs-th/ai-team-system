@@ -9,8 +9,13 @@ import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
+import time
 
 os.environ['TZ'] = 'Asia/Bangkok'
+try:
+    time.tzset()
+except AttributeError:
+    pass
 DB_PATH = Path(__file__).parent / "team.db"
 
 def update_working_memory(agent_id: str, task_id: str = None, 

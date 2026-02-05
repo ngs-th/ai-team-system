@@ -18,9 +18,14 @@ from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass, asdict
 from enum import Enum
 import subprocess
+import time
 
 # Set timezone to Bangkok (+7)
 os.environ['TZ'] = 'Asia/Bangkok'
+try:
+    time.tzset()
+except AttributeError:
+    pass
 
 DB_PATH = Path(__file__).parent / "team.db"
 TELEGRAM_CHANNEL = "1268858185"

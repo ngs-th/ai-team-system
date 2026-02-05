@@ -10,8 +10,13 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict
+import time
 
 os.environ['TZ'] = 'Asia/Bangkok'
+try:
+    time.tzset()
+except AttributeError:
+    pass
 DB_PATH = Path(__file__).parent / "team.db"
 TELEGRAM_CHANNEL = "1268858185"
 

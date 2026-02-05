@@ -10,6 +10,19 @@ __pycache__/
 *.db-wal
 *.db-journal
 
+# Runtime artifacts
+logs/*.log
+logs/*.txt
+logs/audit.log
+logs/*.json
+.claude/
+.playwright-mcp/
+.last_tui_forward
+runtime.override
+
+# Assistant artifacts
+**/CLAUDE.md
+
 # Backups
 *.backup.*
 

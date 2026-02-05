@@ -1,4 +1,5 @@
 <?php
+date_default_timezone_set('Asia/Bangkok');
 /**
  * AI Team Dashboard - Kanban Board View
  * No frameworks, no external libraries - Pure PHP + SQLite3
@@ -70,23 +71,41 @@ $agents = fetchAll($db, '
         a.last_heartbeat,
         a.health_status,
         (SELECT COUNT(*) FROM tasks WHERE assignee_id = a.id AND status IN ("todo", "in_progress", "review", "reviewing")) as active_tasks,
-        (SELECT COUNT(*) FROM tasks WHERE assignee_id = a.id AND status = "in_progress") as in_progress_tasks,
-        ROUND((strftime("%s", "now") - strftime("%s", a.last_heartbeat)) / 60.0, 1) as minutes_since_heartbeat
+        (SELECT COUNT(*) FROM tasks WHERE assignee_id = a.id AND status = "in_progress") as in_progress_tasks
     FROM agents a
     ORDER BY a.name
 ');
 $projects = fetchAll($db, 'SELECT * FROM v_project_status ORDER BY name');
 $tasks = fetchAll($db, 'SELECT t.*, p.name as project_name, a.name as assignee_name FROM tasks t LEFT JOIN projects p ON t.project_id = p.id LEFT JOIN agents a ON t.assignee_id = a.id ORDER BY t.due_date, t.priority');
-$activities = fetchAll($db, 'SELECT th.*, t.title as task_title, a.name as agent_name 
+$activities = fetchAll($db, 'SELECT th.*, datetime(th.timestamp, "localtime") as timestamp_local, t.title as task_title, a.name as agent_name 
     FROM task_history th 
     LEFT JOIN tasks t ON th.task_id = t.id 
     LEFT JOIN agents a ON th.agent_id = a.id 
     ORDER BY th.timestamp DESC LIMIT 20');
 
+// Compute heartbeat age in PHP (treat stored timestamps as Bangkok time)
+foreach ($agents as &$agent) {
+    $minutesSince = null;
+    if (!empty($agent['last_heartbeat'])) {
+        $diff = strtotime('now') - strtotime($agent['last_heartbeat']);
+        $minutesSince = round($diff / 60, 1);
+        if ($minutesSince < 0) {
+            $minutesSince = 0;
+        }
+    }
+    $agent['minutes_since_heartbeat'] = $minutesSince;
+}
+unset($agent);
+
+$agentsById = [];
+foreach ($agents as $agent) {
+    $agentsById[$agent['id']] = $agent;
+}
+
 // Build active task map (agent currently working)
 $activeTaskIds = [];
 foreach ($agents as $agent) {
-    if (!empty($agent['current_task_id']) && ($agent['status'] ?? '') === 'active') {
+    if (!empty($agent['current_task_id']) && (($agent['status'] ?? '') === 'active')) {
         $activeTaskIds[$agent['current_task_id']] = $agent['name'] ?? $agent['id'];
     }
 }
@@ -131,18 +150,17 @@ function formatDurationMinutes($minutes) {
     return $mins . 'm';
 }
 
-// Determine active review sessions (if any agent is actively reviewing a task)
+// Determine active review sessions (reuse active task map + recent heartbeat)
 $activeReviewing = [];
-$activeReviewers = fetchAll($db, 'SELECT current_task_id FROM agents WHERE status = "active" AND current_task_id IS NOT NULL');
-foreach ($activeReviewers as $ar) {
-    $activeReviewing[$ar['current_task_id']] = true;
+foreach ($activeTaskIds as $taskId => $agentName) {
+    $activeReviewing[$taskId] = true;
 }
 
 // Infer the lane for blocked tasks using task history
 function inferBlockedLane($db, $taskId) {
     $row = fetchOneParams($db, '
         SELECT new_status FROM task_history 
-        WHERE task_id = ? AND new_status IS NOT NULL AND new_status != "blocked"
+        WHERE task_id = ? AND new_status IS NOT NULL AND new_status NOT IN ("blocked", "info_needed")
         ORDER BY timestamp DESC LIMIT 1
     ', [$taskId]);
     if (!empty($row['new_status'])) {
@@ -155,7 +173,7 @@ function inferBlockedLane($db, $taskId) {
 
     $row = fetchOneParams($db, '
         SELECT old_status FROM task_history 
-        WHERE task_id = ? AND new_status = "blocked" AND old_status IS NOT NULL
+        WHERE task_id = ? AND new_status IN ("blocked", "info_needed") AND old_status IS NOT NULL
         ORDER BY timestamp DESC LIMIT 1
     ', [$taskId]);
     if (!empty($row['old_status'])) {
@@ -181,12 +199,14 @@ $kanbanColumns = [
 
 foreach ($tasks as $task) {
     $status = $task['status'] ?? 'todo';
-    $isBlocked = ($status === 'blocked');
+    // Blocked is a real task status (attribute), not derived from review feedback.
+    $isBlocked = ($status === 'blocked' || $status === 'info_needed');
     $task['_blocked'] = $isBlocked;
 
-    if ($status === 'blocked') {
+    if ($status === 'blocked' || $status === 'info_needed') {
         $status = inferBlockedLane($db, $task['id']);
     }
+    if ($isBlocked && $status === 'done') $status = 'todo';
 
     if ($status === 'in_progress') {
         $kanbanColumns['doing']['tasks'][] = $task;
@@ -214,15 +234,53 @@ foreach ($tasks as $task) {
     }
 }
 
-// Sort blocked tasks to the top of each column
+// Sort tasks: blocked first, then by time moved into the column (newest on top)
+function laneTimestamp(array $task, string $lane): int {
+    $field = null;
+    switch ($lane) {
+        case 'backlog':
+            $field = $task['backlog_at'] ?? null;
+            break;
+        case 'todo':
+            $field = $task['todo_at'] ?? null;
+            break;
+        case 'doing':
+            $field = $task['in_progress_at'] ?? $task['started_at'] ?? null;
+            break;
+        case 'waiting_review':
+            $field = $task['review_at'] ?? null;
+            break;
+        case 'reviewing':
+            $field = $task['reviewing_at'] ?? $task['review_at'] ?? null;
+            break;
+        case 'done':
+            $field = $task['done_at'] ?? $task['completed_at'] ?? null;
+            break;
+        default:
+            $field = $task['updated_at'] ?? $task['created_at'] ?? null;
+            break;
+    }
+    if (!$field) {
+        $field = $task['created_at'] ?? null;
+    }
+    $ts = $field ? strtotime($field) : 0;
+    return $ts ?: 0;
+}
+
 foreach ($kanbanColumns as $key => $column) {
-    usort($kanbanColumns[$key]['tasks'], function ($a, $b) {
+    $lane = $key;
+    usort($kanbanColumns[$key]['tasks'], function ($a, $b) use ($lane) {
         $aBlocked = !empty($a['_blocked']);
         $bBlocked = !empty($b['_blocked']);
-        if ($aBlocked === $bBlocked) {
-            return 0;
+        if ($aBlocked !== $bBlocked) {
+            return $aBlocked ? -1 : 1;
         }
-        return $aBlocked ? -1 : 1;
+        $aTime = laneTimestamp($a, $lane);
+        $bTime = laneTimestamp($b, $lane);
+        if ($aTime !== $bTime) {
+            return $bTime <=> $aTime; // newest first
+        }
+        return strcmp($b['id'] ?? '', $a['id'] ?? '');
     });
 }
 
@@ -307,9 +365,9 @@ function getDuration($task) {
     $actualDuration = $task['actual_duration_minutes'] ?? null;
     $createdAt = $task['created_at'] ?? null;
     
-    // For done tasks: use actual duration or calculate from started/completed
+    // For done tasks: use actual duration or calculate from timestamps
     if ($status === 'done') {
-        if ($actualDuration) {
+        if ($actualDuration && $actualDuration > 0) {
             $actualDuration = (int) round($actualDuration);
             $hours = floor($actualDuration / 60);
             $mins = $actualDuration % 60;
@@ -319,57 +377,56 @@ function getDuration($task) {
                 return $mins . 'm';
             }
         }
-        // Calculate from started_at -> completed_at
-        if ($startedAt && $completedAt) {
-            $started = new DateTime($startedAt);
-            $completed = new DateTime($completedAt);
-            $diff = $started->diff($completed);
-            
-            if ($diff->d > 0) {
-                return $diff->d . 'd ' . $diff->h . 'h';
-            } elseif ($diff->h > 0) {
-                return $diff->h . 'h ' . $diff->i . 'm';
-            } else {
-                return $diff->i . 'm';
-            }
-        }
-        // Fallback: calculate from created_at -> completed_at
-        if ($createdAt && $completedAt) {
-            $created = new DateTime($createdAt);
-            $completed = new DateTime($completedAt);
-            $diff = $created->diff($completed);
-            
-            if ($diff->d > 0) {
-                return $diff->d . 'd ' . $diff->h . 'h';
-            } elseif ($diff->h > 0) {
-                return $diff->h . 'h ' . $diff->i . 'm';
-            } else {
-                return $diff->i . 'm';
+        $endAt = $completedAt ?? ($task['done_at'] ?? null);
+        $candidates = [
+            $startedAt,
+            $task['in_progress_at'] ?? null,
+            $task['review_at'] ?? null,
+            $task['todo_at'] ?? null,
+        ];
+        if ($endAt) {
+            foreach ($candidates as $startAt) {
+                if (!$startAt) {
+                    continue;
+                }
+                $started = new DateTime($startAt);
+                $completed = new DateTime($endAt);
+                $diff = $started->diff($completed);
+                if ($diff->d > 0) {
+                    return $diff->d . 'd ' . $diff->h . 'h';
+                } elseif ($diff->h > 0) {
+                    return $diff->h . 'h ' . $diff->i . 'm';
+                } else {
+                    return $diff->i . 'm';
+                }
             }
         }
         return 'Done';
     }
     
-    // For in_progress tasks: calculate from started_at to now
-    if ($status === 'in_progress' && $startedAt) {
-        $started = new DateTime($startedAt);
+    // For non-done tasks: show time since entering current lane
+    $baseAt = null;
+    if ($status === 'in_progress') {
+        $baseAt = $startedAt ?: ($task['in_progress_at'] ?? null);
+    } elseif ($status === 'todo') {
+        $baseAt = $task['todo_at'] ?? null;
+    } elseif ($status === 'backlog') {
+        $baseAt = $task['backlog_at'] ?? null;
+    } elseif ($status === 'review') {
+        $baseAt = $task['review_at'] ?? null;
+    } elseif ($status === 'reviewing') {
+        $baseAt = $task['reviewing_at'] ?? ($task['review_at'] ?? null);
+    } elseif ($status === 'blocked') {
+        $baseAt = $task['blocked_at'] ?? null;
+    }
+    if (!$baseAt) {
+        $baseAt = $createdAt;
+    }
+
+    if ($baseAt) {
+        $started = new DateTime($baseAt);
         $now = new DateTime();
         $diff = $started->diff($now);
-        
-        if ($diff->d > 0) {
-            return $diff->d . 'd ' . $diff->h . 'h';
-        } elseif ($diff->h > 0) {
-            return $diff->h . 'h ' . $diff->i . 'm';
-        } else {
-            return $diff->i . 'm';
-        }
-    }
-    
-    // For todo/blocked tasks: show time since created
-    if ($createdAt) {
-        $created = new DateTime($createdAt);
-        $now = new DateTime();
-        $diff = $created->diff($now);
         
         if ($diff->d > 0) {
             return $diff->d . 'd ' . $diff->h . 'h';
@@ -614,6 +671,10 @@ $statConfig = [
             flex-direction: column;
             gap: 10px;
             min-height: 100px;
+            /* Limit column height; allow scroll when many cards */
+            max-height: 2400px;
+            overflow-y: auto;
+            padding-right: 6px;
         }
 .kanban-card {
             background: rgba(255, 255, 255, 0.08);
@@ -652,6 +713,18 @@ $statConfig = [
             color: #ffb3b3;
             font-size: 0.85rem;
         }
+        .kanban-card-feedback {
+            margin-top: 10px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            background: rgba(237, 137, 54, 0.10);
+            color: #ffe5cc;
+            font-size: 0.85rem;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+        }
         .kanban-card:hover {
             background: rgba(255, 255, 255, 0.12);
             transform: translateY(-2px);
@@ -673,9 +746,12 @@ $statConfig = [
             font-size: 0.95rem;
             line-height: 1.4;
             width: 100%;
-            white-space: nowrap;
+            white-space: normal;
             overflow: hidden;
             text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
         }
         .kanban-card-id {
             font-size: 0.75rem;
@@ -754,7 +830,7 @@ $statConfig = [
         .work-indicator {
             position: absolute;
             top: 10px;
-            right: 10px;
+            left: 10px;
             width: 12px;
             height: 12px;
             border-radius: 50%;
@@ -1202,8 +1278,14 @@ $statConfig = [
                                 $assigneeInitials = substr($assigneeInitials, 0, 2);
                             }
                         ?>
-                        <?php $isBlocked = !empty($task['_blocked']); ?>
-                        <?php $isActiveTask = !empty($activeTaskIds[$task['id']]); ?>
+                        <?php
+                            $isBlocked = !empty($task['_blocked']);
+                            $blockedReason = $task['blocked_reason'] ?? null;
+                        ?>
+                        <?php
+                            $isActiveStatus = in_array(($task['status'] ?? ''), ['in_progress', 'reviewing', 'review'], true);
+                            $isActiveTask = $isActiveStatus && !empty($activeTaskIds[$task['id']]);
+                        ?>
                         <div class="kanban-card<?= $isBlocked ? ' blocked' : '' ?><?= $isActiveTask ? ' working' : '' ?>">
                             <?php if ($isBlocked): ?>
                                 <div class="blocked-flag">BLOCKED</div>
@@ -1230,6 +1312,12 @@ $statConfig = [
                             <?php if (!empty($task['runtime'])): ?>
                             <div class="kanban-card-runtime">⚙️ <?= htmlspecialchars($task['runtime']) ?></div>
                             <?php endif; ?>
+
+                            <?php if (!$isBlocked && !empty($task['review_feedback'])): ?>
+                            <div class="kanban-card-feedback" title="<?= htmlspecialchars($task['review_feedback']) ?>">
+                                ↩︎ <?= htmlspecialchars($task['review_feedback']) ?>
+                            </div>
+                            <?php endif; ?>
                             
                             <div class="kanban-card-footer">
                                 <div class="kanban-card-meta">
@@ -1250,9 +1338,9 @@ $statConfig = [
                                 </div>
                             </div>
 
-                            <?php if ($isBlocked && !empty($task['blocked_reason'])): ?>
+                            <?php if ($isBlocked && !empty($blockedReason)): ?>
                             <div class="blocked-reason">
-                                🚫 <?= htmlspecialchars($task['blocked_reason']) ?>
+                                🚫 <?= htmlspecialchars($blockedReason) ?>
                             </div>
                             <?php endif; ?>
                         </div>
@@ -1332,7 +1420,7 @@ $statConfig = [
             <div class="activity-item">
                 <div style="display: flex; justify-content: space-between;">
                     <strong><?= strtoupper(htmlspecialchars($activity['action'] ?? 'unknown')) ?></strong>
-                    <span class="activity-time"><?= htmlspecialchars($activity['timestamp'] ?? '-') ?></span>
+                    <span class="activity-time"><?= htmlspecialchars($activity['timestamp_local'] ?? $activity['timestamp'] ?? '-') ?></span>
                 </div>
                 <div style="margin-top: 5px;">
                     Task: <?= htmlspecialchars($activity['task_title'] ?? $activity['task_id'] ?? 'Unknown') ?><br>
@@ -1435,9 +1523,30 @@ $statConfig = [
             `;
             
             // Format date helper (Bangkok +7 timezone)
-            const formatDate = (dateStr) => {
+            // This project stores timestamps in Bangkok local time (naive SQLite DATETIME).
+            const normalizeBangkokDate = (dateStr) => {
                 if (!dateStr) return null;
-                const date = new Date(dateStr.replace(' ', 'T'));
+                const s = String(dateStr).trim();
+                if (!s) return null;
+                // ISO-ish already (may include timezone)
+                if (s.includes('T')) return s;
+                // SQLite DATETIME "YYYY-MM-DD HH:MM:SS" -> make it timezone-aware as +07:00
+                if (/^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}/.test(s)) {
+                    return s.replace(' ', 'T') + '+07:00';
+                }
+                return s;
+            };
+
+            const parseBangkokDate = (dateStr) => {
+                const norm = normalizeBangkokDate(dateStr);
+                if (!norm) return null;
+                const d = new Date(norm);
+                return isNaN(d.getTime()) ? null : d;
+            };
+
+            const formatDate = (dateStr) => {
+                const date = parseBangkokDate(dateStr);
+                if (!date) return null;
                 return date.toLocaleString('th-TH', {
                     timeZone: 'Asia/Bangkok',
                     year: 'numeric',
@@ -1446,12 +1555,6 @@ $statConfig = [
                     hour: '2-digit',
                     minute: '2-digit'
                 }) + ' (GMT+7)';
-            };
-
-            const parseLocalDate = (dateStr) => {
-                if (!dateStr) return null;
-                const d = new Date(dateStr.replace(' ', 'T'));
-                return isNaN(d.getTime()) ? null : d;
             };
 
             const formatDurationMs = (ms) => {
@@ -1467,8 +1570,8 @@ $statConfig = [
             };
 
             const calcDuration = (fromStr, toStr) => {
-                const from = parseLocalDate(fromStr);
-                const to = parseLocalDate(toStr);
+                const from = parseBangkokDate(fromStr);
+                const to = parseBangkokDate(toStr);
                 if (!from || !to) return null;
                 return to.getTime() - from.getTime();
             };
@@ -1482,7 +1585,7 @@ $statConfig = [
                 ${task.working_dir ? `<p><strong>📁 Working Dir:</strong> <code style="background: #2d3748; padding: 2px 6px; border-radius: 4px; font-size: 0.9em;">${task.working_dir}</code></p>` : '<p><strong>📁 Working Dir:</strong> <span style="color: #f56565;">⚠️ Not set!</span></p>'}
                 ${task.runtime ? `<p><strong>⚙️ Runtime:</strong> <span>${escapeHtml(task.runtime)}</span></p>` : ''}
                 ${task.runtime_at ? `<p><strong>⏱ Runtime At:</strong> ${formatDate(task.runtime_at)}</p>` : ''}
-                ${(task.status === 'blocked' && task.blocked_reason) ? `<p><strong>🚫 Blocked Reason:</strong> <span style="color: #f56565; white-space: pre-wrap;">${escapeHtml(task.blocked_reason).replace(/\\n/g, '\n')}</span></p>` : ''}
+                ${((task.status === 'blocked' || task.status === 'info_needed') && task.blocked_reason) ? `<p><strong>🚫 Blocked Reason:</strong> <span style="color: #f56565; white-space: pre-wrap;">${escapeHtml(task.blocked_reason).replace(/\\n/g, '\n')}</span></p>` : ''}
                 ${task.review_feedback ? `<p><strong>🧪 Review Feedback:</strong> <span style="color: #fed7d7; white-space: pre-wrap;">${escapeHtml(task.review_feedback).replace(/\\n/g, '\n')}</span></p>` : ''}
                 ${task.review_feedback_at ? `<p><strong>🧪 Feedback Time:</strong> ${formatDate(task.review_feedback_at)}</p>` : ''}
                 <div class="task-meta-grid" style="margin-top: 10px;">

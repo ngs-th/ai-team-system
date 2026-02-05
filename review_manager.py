@@ -101,6 +101,13 @@ def checklist_unchecked(text: Optional[str]) -> list:
     return items
 
 
+def _is_human_only_prereq(label: str) -> bool:
+    if not label:
+        return False
+    s = label.lower()
+    return ("@human" in s) or ("human-only" in s) or ("🔒" in label) or s.startswith("human:")
+
+
 def reviewer_status(reviewer_id: str):
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
@@ -267,6 +274,17 @@ def reconcile_completed_tasks(verbose: bool = False) -> None:
     cursor = conn.cursor()
     cursor.execute(
         """
+        SELECT id FROM tasks
+        WHERE status IN ('in_progress')
+          AND (
+                completed_at IS NOT NULL
+             OR progress >= 100
+          )
+        """
+    )
+    candidate_ids = [row[0] for row in cursor.fetchall()]
+    cursor.execute(
+        """
         UPDATE tasks
         SET status = 'review',
             progress = CASE WHEN progress IS NULL OR progress < 100 THEN 100 ELSE progress END,
@@ -274,7 +292,7 @@ def reconcile_completed_tasks(verbose: bool = False) -> None:
             blocked_at = NULL,
             review_at = datetime('now', 'localtime'),
             updated_at = datetime('now', 'localtime')
-        WHERE status IN ('todo', 'in_progress')
+        WHERE status IN ('in_progress')
           AND (
                 completed_at IS NOT NULL
              OR progress >= 100
@@ -284,6 +302,13 @@ def reconcile_completed_tasks(verbose: bool = False) -> None:
     moved = cursor.rowcount
     conn.commit()
     conn.close()
+    if candidate_ids:
+        try:
+            from sprint_status_sync import update_story_status
+            for tid in candidate_ids:
+                update_story_status(tid, 'review')
+        except Exception:
+            pass
     if verbose and moved:
         print(f"Reconciled {moved} completed tasks -> review")
 
@@ -311,6 +336,11 @@ def auto_reject(task_id: str, reason: str):
     ''', (task_id, reason))
     conn.commit()
     conn.close()
+    try:
+        from sprint_status_sync import update_story_status
+        update_story_status(task_id, 'todo')
+    except Exception:
+        pass
 
 
 def soft_return_to_todo(task_id: str, reason: str):
@@ -350,7 +380,51 @@ def soft_return_to_todo(task_id: str, reason: str):
 
     cursor.execute('''
         INSERT INTO task_history (task_id, action, old_status, new_status, agent_id, notes)
-        VALUES (?, 'requeue', ?, 'todo', 'auto-review', ?)
+        VALUES (?, 'backlogged', ?, 'todo', 'auto-review', ?)
+    ''', (task_id, old_status, reason))
+
+    conn.commit()
+    conn.close()
+    try:
+        from sprint_status_sync import update_story_status
+        update_story_status(task_id, 'todo')
+    except Exception:
+        pass
+
+
+def mark_info_needed(task_id: str, reason: str):
+    """Mark task as waiting for human input (does not count as a fix loop)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    cursor.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return
+    old_status = row[0] or "review"
+
+    cursor.execute('''
+        UPDATE tasks
+        SET status = 'info_needed',
+            blocked_reason = ?,
+            blocked_at = datetime('now', 'localtime'),
+            review_feedback = ?,
+            review_feedback_at = datetime('now', 'localtime'),
+            updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+    ''', (reason, reason, task_id))
+
+    cursor.execute('''
+        UPDATE agents
+        SET status = 'idle',
+            current_task_id = NULL,
+            updated_at = datetime('now', 'localtime')
+        WHERE current_task_id = ?
+    ''', (task_id,))
+
+    cursor.execute('''
+        INSERT INTO task_history (task_id, action, old_status, new_status, agent_id, notes)
+        VALUES (?, 'updated', ?, 'info_needed', 'auto-review', ?)
     ''', (task_id, old_status, reason))
 
     conn.commit()
@@ -376,6 +450,11 @@ def mark_reviewing(task_id: str, note: str = "Auto-review started"):
         ''', (task_id, note))
     conn.commit()
     conn.close()
+    try:
+        from sprint_status_sync import update_story_status
+        update_story_status(task_id, 'reviewing')
+    except Exception:
+        pass
 
 def mark_waiting_review(task_id: str, note: str = "No active reviewer; returned to waiting review"):
     conn = sqlite3.connect(str(DB_PATH))
@@ -395,6 +474,11 @@ def mark_waiting_review(task_id: str, note: str = "No active reviewer; returned 
         ''', (task_id, note))
     conn.commit()
     conn.close()
+    try:
+        from sprint_status_sync import update_story_status
+        update_story_status(task_id, 'review')
+    except Exception:
+        pass
 
 
 def review_tasks(dry_run: bool = False, verbose: bool = False):
@@ -435,21 +519,18 @@ def review_tasks(dry_run: bool = False, verbose: bool = False):
         # Review gate: prerequisites must be checked before any review starts.
         unmet_prereq = checklist_unchecked(prerequisites)
         if unmet_prereq:
-            reason = "Review gate failed: prerequisites unchecked -> " + "; ".join(unmet_prereq)
+            human_unmet = [p for p in unmet_prereq if _is_human_only_prereq(p)]
+            if human_unmet:
+                reason = "Info needed (HUMAN-only prerequisites unchecked) -> " + "; ".join(human_unmet)
+            else:
+                reason = "Review gate failed: prerequisites unchecked -> " + "; ".join(unmet_prereq)
             if verbose:
                 print(f"REQUEUE {task_id} ({reason})")
             if not dry_run:
-                soft_return_to_todo(task_id, reason)
-            continue
-
-        # Strict mode: if no recent working memory, return to todo without fix-loop penalty.
-        memory_ok = has_recent_working_memory(assignee_id, task_id)
-        if not memory_ok:
-            reason = f"Auto-requeue: missing recent working memory for agent {assignee_id}"
-            if verbose:
-                print(f"REQUEUE {task_id} ({reason})")
-            if not dry_run:
-                soft_return_to_todo(task_id, reason)
+                if human_unmet:
+                    mark_info_needed(task_id, reason)
+                else:
+                    soft_return_to_todo(task_id, reason)
             continue
 
         evidence = []

@@ -60,9 +60,10 @@ def report_status(agent_id: str, status: str, message: str = ""):
     cursor.execute('''
         UPDATE agents 
         SET status = ?,
-            last_heartbeat = datetime('now')
+            current_task_id = CASE WHEN ? = 'idle' THEN NULL ELSE current_task_id END,
+            last_heartbeat = datetime('now', 'localtime')
         WHERE id = ?
-    ''', (status, agent_id))
+    ''', (status, status, agent_id))
     
     # Log the report
     cursor.execute('''
@@ -71,6 +72,7 @@ def report_status(agent_id: str, status: str, message: str = ""):
     ''', (agent_id, f"Status: {status} - {message}"))
     
     conn.commit()
+    # Status updates do not imply task status changes; no sprint status sync here.
     conn.close()
     print(f"✅ Reported status: {status}")
 
@@ -97,6 +99,11 @@ def report_progress(task_id: str, progress: int, notes: str = ""):
     ''', (task_id, f"Progress: {progress}% - {notes}"))
     
     conn.commit()
+    try:
+        from sprint_status_sync import update_story_status
+        update_story_status(task_id, 'in_progress')
+    except Exception:
+        pass
     conn.close()
     print(f"✅ Reported progress: {progress}%")
 
@@ -104,33 +111,8 @@ def report_start(agent_id: str, task_id: str):
     """Report that agent has started working"""
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
-
-    # Check prerequisites checklist
-    cursor.execute('SELECT prerequisites FROM tasks WHERE id = ?', (task_id,))
-    row = cursor.fetchone()
-    prerequisites = (row[0] or '') if row else ''
-    if prerequisites.strip():
-        items = []
-        for idx, line in enumerate(prerequisites.splitlines()):
-            m = re.match(r'^\s*[-*]\s+\[(x| )\]\s+(.*)$', line, re.IGNORECASE)
-            if not m:
-                continue
-            items.append((m.group(1).lower() == 'x', m.group(2).strip()))
-        if not items:
-            reason = "Prerequisites must be a checklist (- [ ] item)."
-            reject_to_todo(conn, task_id, agent_id, reason, old_status='todo')
-            conn.commit()
-            conn.close()
-            print(f"⚠️ Task {task_id} rejected: {reason}")
-            return
-        unchecked = [text for checked, text in items if not checked]
-        if unchecked:
-            reason = "Prerequisites not checked: " + "; ".join(unchecked)
-            reject_to_todo(conn, task_id, agent_id, reason, old_status='todo')
-            conn.commit()
-            conn.close()
-            print(f"⚠️ Task {task_id} rejected: {reason}")
-            return
+    # Note: Do not gate start on prerequisites. The agent must verify prerequisites first,
+    # and requeue with a detailed reason if any prerequisite cannot be satisfied.
     
     # Update agent
     cursor.execute('''

@@ -570,7 +570,7 @@ crontab -e
 
 # Add these lines
 */5 * * * * cd /Users/ngs/clawd/projects/ai-team && python3 health_monitor.py --daemon
-*/10 * * * * cd /Users/ngs/clawd/projects/ai-team && python3 auto_assign.py --run
+*/5 * * * * cd /Users/ngs/clawd/projects/ai-team && python3 auto_assign.py --run
 0 * * * * cd /Users/ngs/clawd/projects/ai-team && python3 memory_maintenance.py
 ```
 

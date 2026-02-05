@@ -10,6 +10,7 @@
 ```bash
 # Create task (with required fields)
 python3 team_db.py task create "Title" --project PROJ-001 \
+  --working-dir /Users/ngs/Herd/nurse-ai \
   --expected-outcome "Success criteria" \
   --prerequisites "- [ ] Item" \
   --acceptance "- [ ] Criteria"
@@ -70,9 +71,11 @@ python3 health_monitor.py --auto-resolve
 | backlog | 📋 | Waiting for requirements |
 | todo | ⬜ | Ready to start |
 | in_progress | 🔄 | Currently working |
-| review | 👀 | Waiting for approval |
+| review | 👀 | Waiting for review |
+| reviewing | 🔍 | Reviewer is working |
 | done | ✅ | Completed |
 | blocked | 🚧 | Blocked, needs help |
+| info_needed | 🧩 | Waiting for human input (e.g. real API keys) |
 
 ### Agent Status
 | Status | Emoji | Meaning |
@@ -94,7 +97,7 @@ python3 health_monitor.py --auto-resolve
 ## 🔗 Task Lifecycle Flow
 
 ```
-Create → Assign → Start → Progress → Review → Done
+Create → Assign → Start → Progress → Review → Reviewing → Done
    ↓        ↓       ↓         ↓         ↓
 Backlog  Block   Block    Update    Approve
 ```
@@ -106,6 +109,7 @@ Backlog  Block   Block    Update    Approve
 4. **Block**: `task block <id> "reason"`
 5. **Unblock**: `task unblock <id>`
 6. **Complete**: `task done <id>` → `task approve <id>`
+7. **Info Needed**: `task info-needed <id> "<what is missing>"`
 
 ---
 
@@ -152,13 +156,13 @@ python3 team_db.py task create "Feature Name" \
 
 ```bash
 # Health check every 5 minutes
-*/5 * * * * cd /Users/ngs/clawd/projects/ai-team && python3 health_monitor.py --daemon
+*/5 * * * * cd /Users/ngs/Herd/ai-team-system && python3 health_monitor.py --check
 
 # Auto-assign every 10 minutes
-*/10 * * * * cd /Users/ngs/clawd/projects/ai-team && python3 auto_assign.py --run
+*/5 * * * * cd /Users/ngs/Herd/ai-team-system && python3 auto_assign.py --run
 
 # Memory maintenance hourly
-0 * * * * cd /Users/ngs/clawd/projects/ai-team && python3 memory_maintenance.py
+0 * * * * cd /Users/ngs/Herd/ai-team-system && python3 memory_maintenance.py
 ```
 
 ---

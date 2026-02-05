@@ -5,12 +5,18 @@ Prevents duplicate spawns and handles sessions properly
 """
 
 import os
+import re
 import sqlite3
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
 
 os.environ['TZ'] = 'Asia/Bangkok'
+try:
+    time.tzset()
+except AttributeError:
+    pass
 DB_PATH = Path(__file__).parent / "team.db"
 
 # Import audit logger
@@ -43,7 +49,7 @@ def get_tasks_to_spawn(task_id: Optional[str] = None) -> List[Dict]:
         WHERE t.status = 'todo'
           AND t.assignee_id IS NOT NULL
           AND t.assignee_id != ''
-          AND (t.updated_at IS NULL OR t.updated_at < datetime('now', 'localtime', '-2 minutes'))  -- Wait 2 min after assign
+          AND (t.updated_at IS NULL OR t.updated_at < datetime('now', 'localtime', '-15 seconds'))  -- small debounce after assign
     '''
     params = []
     if task_id:
@@ -78,13 +84,12 @@ def was_recently_spawned(task_id: str, minutes: int = 10) -> bool:
     """Check if task was spawned recently"""
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
-    # Use string formatting for interval since SQLite doesn't support parameterized intervals
     interval = f'-{minutes} minutes'
     cursor.execute('''
-        SELECT 1 FROM task_history 
-        WHERE task_id = ? 
-        AND action = 'assigned'
-        AND timestamp > datetime('now', ?)
+        SELECT 1 FROM tasks
+        WHERE id = ?
+          AND runtime_at IS NOT NULL
+          AND runtime_at > datetime('now', 'localtime', ?)
         LIMIT 1
     ''', (task_id, interval))
     result = cursor.fetchone()
@@ -105,20 +110,25 @@ def get_agent_context(agent_id: str) -> Dict:
     return {'context': '', 'learnings': ''}
 
 def get_busy_agents() -> Dict[str, str]:
-    """Return agents that should not receive a new task (active or already assigned)."""
+    """Return agents that should not receive a new task (actively working/reviewing)."""
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT id, status, current_task_id
-        FROM agents
-        WHERE status = 'active' OR current_task_id IS NOT NULL
+        SELECT a.id, a.status, a.current_task_id
+        FROM agents a
+        WHERE a.status = 'active'
+           OR EXISTS (
+                SELECT 1 FROM tasks t
+                WHERE t.assignee_id = a.id
+                  AND t.status IN ('in_progress')
+           )
     ''')
     rows = cursor.fetchall()
     conn.close()
     busy = {}
     for agent_id, status, task_id in rows:
-        reason = "active" if status == "active" else "has current_task_id"
-        if task_id:
+        reason = "active" if status == "active" else "has active task"
+        if task_id and status == "active":
             reason = f"{reason}:{task_id}"
         busy[agent_id] = reason
     return busy
@@ -167,9 +177,12 @@ If prerequisites are a checklist, mark each item:
 ```bash
 python3 {base_dir}/team_db.py task check {task['id']} --field prerequisites --index <n> --done
 ```
+**HUMAN-only prerequisites** are marked with `@human` / `HUMAN:` / `🔒`.
+Do **NOT** check those as an agent. Instead, return task to todo with a clear request for the missing info.
+
 If any prerequisite is NOT met, stop work and send back to todo with clear reason:
 ```bash
-python3 {base_dir}/team_db.py task reject {task['id']} --reason "Prerequisite not met: <reason>"
+python3 {base_dir}/team_db.py task requeue {task['id']} --reason "Prerequisite not met: <reason (include exact detail)>"
 ```
 
 ### ✅ Acceptance Criteria (review will require all checked)
@@ -222,7 +235,7 @@ python3 {base_dir}/agent_reporter.py complete --agent {task['assignee_id']} \
 """
 
 def log_spawn(task_id: str, agent_id: str):
-    """Log that task was spawned and update agent status"""
+    """Log that task was spawned and bind current_task_id for visibility."""
     conn = sqlite3.connect(str(DB_PATH))
     cursor = conn.cursor()
     
@@ -246,17 +259,63 @@ def log_spawn(task_id: str, agent_id: str):
     if task_status == 'todo':
         cursor.execute('''
             UPDATE agents 
-            SET status = 'active', 
-                current_task_id = ?,
-                last_heartbeat = datetime('now', 'localtime')
+            SET current_task_id = ?,
+                last_heartbeat = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (task_id, agent_id))
     
     conn.commit()
     conn.close()
     
-    # Audit log
-    audit.log_status_change(agent_id, old_status, 'active', 'Task spawned (waiting for explicit start)')
+    # Audit log (no status change here; task remains todo until explicit start)
+    audit.log_status_change(agent_id, old_status, old_status, 'Task spawned (waiting for start)')
+
+
+def checklist_unchecked(text: str):
+    items = []
+    if not text:
+        return items
+    for line in text.splitlines():
+        m = re.match(r'^\s*[-*]\s+\[(x| )\]\s+(.*)$', line, re.IGNORECASE)
+        if not m:
+            continue
+        checked = m.group(1).lower() == 'x'
+        label = (m.group(2) or '').strip()
+        if not checked and label:
+            items.append(label)
+    return items
+
+
+def set_prereq_feedback(task_id: str, reason: str):
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE tasks
+        SET review_feedback = ?,
+            review_feedback_at = datetime('now', 'localtime'),
+            updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+    ''', (reason, task_id))
+    cursor.execute('''
+        INSERT INTO task_history (task_id, action, notes)
+        VALUES (?, 'updated', ?)
+    ''', (task_id, reason))
+    conn.commit()
+    conn.close()
+
+
+def auto_start_task(task_id: str, agent_id: str) -> bool:
+    """Move task todo -> in_progress after successful spawn (enforces prerequisite gate)."""
+    try:
+        from team_db import AITeamDB
+        db = AITeamDB(DB_PATH)
+        try:
+            return bool(db.start_task(task_id, agent_id))
+        finally:
+            db.close()
+    except Exception:
+        return False
 
 def spawn_subagent(task: Dict, task_message: str) -> bool:
     """Run agent via configured runtime (detached)."""
@@ -310,9 +369,11 @@ def main():
     print("=" * 60)
     
     runtime = get_runtime()
-    # Get active sessions to avoid duplicates (runtime-dependent)
-    active_agents = get_active_sessions()
+    # Get active sessions to avoid duplicates (runtime-dependent).
+    # Only count sessions that look like subagents (not "main:cron").
+    active_agents = {}
     if runtime == "openclaw":
+        active_agents = {k: v for k, v in get_active_sessions().items() if k and k != "main"}
         print(f"Runtime: {runtime} | Active agent sessions: {len(active_agents)}")
     else:
         print(f"Runtime: {runtime} | Session query not available (using DB busy-state only)")
@@ -342,6 +403,9 @@ def main():
             print(f"⏭️  {task_id}: Working dir does not exist: {working_dir}")
             skipped.append((task_id, f"invalid working_dir: {working_dir}"))
             continue
+
+        # Note: We do not gate spawning on prerequisites. The agent is expected to
+        # verify prerequisites first and check them 1-by-1 during the task.
         
         # Check 3: Agent already has an active session?
         if task['assignee_id'] in active_agents:
@@ -374,6 +438,10 @@ def main():
         if spawn_success:
             update_task_runtime(task_id, runtime)
             log_spawn(task_id, task['assignee_id'])
+            # Auto-start (moves card to Doing). Enforces prerequisite gate.
+            started = auto_start_task(task_id, task['assignee_id'])
+            if not started:
+                print(f"    ⚠️  {task_id}: spawn ok but start_task failed (kept in todo)")
             busy_agents[task['assignee_id']] = f"active:{task_id}"
             spawned.append({
                 'task_id': task_id,

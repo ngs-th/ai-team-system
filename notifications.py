@@ -9,6 +9,8 @@ import os
 import sqlite3
 import subprocess
 import json
+import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -16,6 +18,10 @@ from enum import Enum
 
 # Set timezone to Bangkok (+7)
 os.environ['TZ'] = 'Asia/Bangkok'
+try:
+    time.tzset()
+except AttributeError:
+    pass
 
 TELEGRAM_CHANNEL = "1268858185"
 
@@ -41,9 +47,6 @@ class NotificationEvent(Enum):
     ERROR = "error"
     MILESTONE = "milestone"
     AUTO_STOP = "auto_stop"
-
-
-import re
 
 class NotificationManager:
     """

@@ -29,9 +29,14 @@ from enum import Enum
 import csv
 import io
 from collections import defaultdict
+import time
 
 # Set timezone to Bangkok (+7)
 os.environ['TZ'] = 'Asia/Bangkok'
+try:
+    time.tzset()
+except AttributeError:
+    pass
 
 DB_PATH = Path(__file__).parent / "team.db"
 

@@ -15,9 +15,14 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).parent))
 
 from notifications import ProgressNotifier, NotificationManager, NotificationEvent
+import time
 
 # Set timezone
 os.environ['TZ'] = 'Asia/Bangkok'
+try:
+    time.tzset()
+except AttributeError:
+    pass
 
 DB_PATH = Path(__file__).parent / "team.db"
 TELEGRAM_CHANNEL = "1268858185"

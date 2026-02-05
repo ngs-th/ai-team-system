@@ -18,9 +18,14 @@ from typing import Optional, List, Dict
 # Import health monitor and notifications
 from health_monitor import HealthMonitor
 from notifications import NotificationManager, NotificationEvent, send_telegram_notification
+import time
 
 # Set timezone to Bangkok (+7)
 os.environ['TZ'] = 'Asia/Bangkok'
+try:
+    time.tzset()
+except AttributeError:
+    pass
 
 DB_PATH = Path(__file__).parent / "team.db"
 TELEGRAM_CHANNEL = "1268858185"
@@ -57,6 +62,14 @@ class AITeamDB:
                 'line': line
             })
         return items
+
+    @staticmethod
+    def _is_human_only_check_item(label: str) -> bool:
+        """Marker for prerequisites that only a human can satisfy/check."""
+        if not label:
+            return False
+        s = label.lower()
+        return ("@human" in s) or ("human-only" in s) or ("🔒" in label) or s.startswith("human:")
 
     @classmethod
     def _checklist_unchecked(cls, text: str) -> List[str]:
@@ -168,9 +181,131 @@ class AITeamDB:
         ''', (task_id, prev_status, reason))
 
         self.conn.commit()
+        try:
+            from sprint_status_sync import update_story_status
+            update_story_status(task_id, 'todo')
+        except Exception:
+            pass
         return True
 
-    def checklist_update(self, task_id: str, field: str, index: int, checked: bool = True) -> bool:
+    def requeue_to_todo(self, task_id: str, reason: str, actor: str = "system") -> bool:
+        """Return task to todo with detailed reason (no blocked)."""
+        if not reason:
+            reason = "No reason provided"
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT status, assignee_id FROM tasks WHERE id = ?', (task_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        old_status = row[0] or "todo"
+        assignee = row[1]
+
+        cursor.execute('''
+            UPDATE tasks
+            SET status = 'todo',
+                priority = 'high',
+                progress = 0,
+                started_at = NULL,
+                in_progress_at = NULL,
+                completed_at = NULL,
+                review_at = NULL,
+                reviewing_at = NULL,
+                done_at = NULL,
+                blocked_reason = NULL,
+                blocked_at = NULL,
+                review_feedback = ?,
+                review_feedback_at = datetime('now', 'localtime'),
+                todo_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+        ''', (reason, task_id))
+
+        # Release any agent bound to this task
+        cursor.execute('''
+            UPDATE agents
+            SET status = 'idle',
+                current_task_id = NULL,
+                updated_at = datetime('now', 'localtime')
+            WHERE current_task_id = ?
+        ''', (task_id,))
+
+        cursor.execute('''
+            INSERT INTO task_history (task_id, action, old_status, new_status, agent_id, notes)
+            VALUES (?, 'rejected', ?, 'todo', ?, ?)
+        ''', (task_id, old_status, actor, reason))
+
+        self.conn.commit()
+        try:
+            from sprint_status_sync import update_story_status
+            update_story_status(task_id, 'todo')
+        except Exception:
+            pass
+        return True
+
+    def reopen_task(self, task_id: str, reason: str, actor: str = "system") -> bool:
+        """Reopen a done task back to todo (priority high)."""
+        if not reason:
+            reason = "Reopened for further work"
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT title, status, assignee_id FROM tasks WHERE id = ?', (task_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        task_title, status, assignee = row[0], row[1] or 'todo', row[2]
+        if status != 'done':
+            raise ValueError(f"Task {task_id} is not done (current: {status})")
+
+        cursor.execute('''
+            UPDATE tasks
+            SET status = 'todo',
+                priority = 'high',
+                progress = 0,
+                started_at = NULL,
+                in_progress_at = NULL,
+                completed_at = NULL,
+                review_at = NULL,
+                reviewing_at = NULL,
+                done_at = NULL,
+                blocked_reason = NULL,
+                blocked_at = NULL,
+                review_feedback = ?,
+                review_feedback_at = datetime('now', 'localtime'),
+                todo_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+        ''', (reason, task_id))
+
+        cursor.execute('''
+            UPDATE agents
+            SET status = 'idle',
+                current_task_id = NULL,
+                updated_at = datetime('now', 'localtime')
+            WHERE current_task_id = ?
+        ''', (task_id,))
+
+        cursor.execute('''
+            INSERT INTO task_history (task_id, action, old_status, new_status, agent_id, notes)
+            VALUES (?, 'updated', 'done', 'todo', ?, ?)
+        ''', (task_id, actor, reason))
+
+        self.conn.commit()
+        try:
+            from sprint_status_sync import update_story_status
+            update_story_status(task_id, 'todo')
+        except Exception:
+            pass
+
+        self.notifier.notify(
+            event=NotificationEvent.BLOCK,
+            task_id=task_id,
+            task_title=task_title,
+            agent_id=assignee,
+            agent_name=assignee,
+            reason=f"Reopened -> todo. {reason}"
+        )
+        return True
+
+    def checklist_update(self, task_id: str, field: str, index: int, checked: bool = True, actor: str = "agent") -> bool:
         """Update checklist item in prerequisites/acceptance_criteria."""
         cursor = self.conn.cursor()
         column = 'prerequisites' if field == 'prerequisites' else 'acceptance_criteria'
@@ -179,6 +314,12 @@ class AITeamDB:
         if not row:
             return False
         text, status, blocked_reason = row
+        if field == 'prerequisites' and checked:
+            items = self._parse_checklist(text or '')
+            if 1 <= index <= len(items):
+                label = items[index - 1].get('text') or ''
+                if self._is_human_only_check_item(label) and (actor or '').lower() != 'human':
+                    raise ValueError("This prerequisite is HUMAN-only. Use --actor human to check it.")
         updated = self._update_checklist(text or '', index, checked)
         cursor.execute(f'''
             UPDATE tasks
@@ -251,10 +392,10 @@ class AITeamDB:
             INSERT INTO tasks (id, title, description, assignee_id, project_id,
                              priority, estimated_hours, due_date, status,
                              prerequisites, acceptance_criteria, expected_outcome, working_dir,
-                             todo_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?, datetime('now', 'localtime'))
+                             created_at, todo_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?, datetime('now', 'localtime'), datetime('now', 'localtime'))
         ''', (task_id, title, description, assignee_id, project_id,
-              priority, estimated_hours, due_date, prerequisites, 
+              priority, estimated_hours, due_date, prerequisites,
               acceptance_criteria, expected_outcome, working_dir))
         
         # Log the creation
@@ -264,6 +405,12 @@ class AITeamDB:
         ''', (task_id, f"Task created with priority {priority}"))
         
         self.conn.commit()
+
+        try:
+            from sprint_status_sync import update_story_status
+            update_story_status(task_id, 'todo')
+        except Exception:
+            pass
         
         # Send Telegram notification using NotificationManager
         self.notifier.notify(
@@ -296,12 +443,6 @@ class AITeamDB:
                 self._reject_to_todo(task_id, reason, old_status='todo', assignee=agent_id)
                 print(f"⚠️ Task {task_id} rejected: {reason}")
                 return False
-            unchecked = [i['text'] for i in items if not i['checked']]
-            if unchecked:
-                reason = "Prerequisites not checked: " + "; ".join(unchecked)
-                self._reject_to_todo(task_id, reason, old_status='todo', assignee=agent_id)
-                print(f"⚠️ Task {task_id} rejected: {reason}")
-                return False
         
         # Update task - reset started_at when reassigning so fresh start time on next start
         cursor.execute('''
@@ -317,7 +458,7 @@ class AITeamDB:
         # Update agent stats
         cursor.execute('''
             UPDATE agents SET total_tasks_assigned = total_tasks_assigned + 1,
-                            current_task_id = ?, status = 'active',
+                            current_task_id = ?,
                             updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (task_id, agent_id))
@@ -365,12 +506,6 @@ class AITeamDB:
                 self._reject_to_todo(task_id, reason, old_status=old_status, assignee=assignee)
                 print(f"⚠️ Task {task_id} rejected: {reason}")
                 return False
-            unchecked = [i['text'] for i in items if not i['checked']]
-            if unchecked:
-                reason = "Prerequisites not checked: " + "; ".join(unchecked)
-                self._reject_to_todo(task_id, reason, old_status=old_status, assignee=assignee)
-                print(f"⚠️ Task {task_id} rejected: {reason}")
-                return False
         
         cursor.execute('''
             UPDATE tasks 
@@ -381,11 +516,22 @@ class AITeamDB:
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
         ''', (task_id,))
-        
+
         cursor.execute('''
             INSERT INTO task_history (task_id, action, old_status, new_status)
             VALUES (?, 'started', ?, 'in_progress')
         ''', (task_id, old_status))
+
+        # Update agent status to active when task officially starts
+        if assignee and assignee != "Unknown":
+            cursor.execute('''
+                UPDATE agents
+                SET status = 'active',
+                    current_task_id = ?,
+                    last_heartbeat = datetime('now', 'localtime'),
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+            ''', (task_id, assignee))
 
         # Auto-bootstrap working memory so review gate does not fail on first cycle.
         if assignee and assignee != "Unknown":
@@ -470,6 +616,12 @@ class AITeamDB:
         ''', (task_id,))
         
         self.conn.commit()
+
+        try:
+            from sprint_status_sync import update_story_status
+            update_story_status(task_id, 'review')
+        except Exception:
+            pass
         
         # Send Telegram notification using NotificationManager
         self.notifier.notify(
@@ -598,6 +750,12 @@ class AITeamDB:
         ''', (task_id, current_status))
         
         self.conn.commit()
+
+        try:
+            from sprint_status_sync import update_story_status
+            update_story_status(task_id, 'review')
+        except Exception:
+            pass
         
         # Send Telegram notification - task ready for review
         self.notifier.notify(
@@ -695,6 +853,8 @@ class AITeamDB:
                 done_at = datetime('now', 'localtime'),
                 blocked_reason = NULL,
                 blocked_at = NULL,
+                review_feedback = NULL,
+                review_feedback_at = NULL,
                 updated_at = datetime('now', 'localtime')
                 {duration_calc}
             WHERE id = ?
@@ -733,6 +893,12 @@ class AITeamDB:
         ''', (task_id, row[1], reviewer_id, f"Approved by {reviewer_id or 'unknown'}"))
         
         self.conn.commit()
+
+        try:
+            from sprint_status_sync import update_story_status
+            update_story_status(task_id, 'done')
+        except Exception:
+            pass
         
         # Send completion notification
         self.notifier.notify(
@@ -766,10 +932,21 @@ class AITeamDB:
         task_title = row[0]
         original_assignee = row[2]
         current_loop_count = row[3] or 0
-        new_loop_count = current_loop_count + 1
+        reason_l = (reason or "").lower()
+
+        # Do NOT count fix loops for administrative/system validation rejections.
+        # Example: prerequisites unchecked, missing working memory, etc.
+        no_loop_reject = (
+            "prereq" in reason_l
+            or "prerequisite" in reason_l
+            or "working memory" in reason_l
+            or "missing recent working memory" in reason_l
+        )
+
+        new_loop_count = current_loop_count + (0 if no_loop_reject else 1)
         
         # Check if we've hit the auto-stop limit (10 loops)
-        if new_loop_count >= 10:
+        if (not no_loop_reject) and new_loop_count >= 10:
             print(f"🛑 AUTO-STOP: Task {task_id} has reached {new_loop_count} fix loops!")
             print(f"   Blocking task - manual intervention required.")
             
@@ -802,7 +979,7 @@ class AITeamDB:
             
             return True
         
-        # Normal reject - return to todo with higher priority for quick rework
+        # Reject - return to todo with higher priority for quick rework
         cursor.execute('''
             UPDATE tasks 
             SET status = 'todo', progress = 0, fix_loop_count = ?,
@@ -847,11 +1024,23 @@ class AITeamDB:
         cursor.execute('''
             INSERT INTO task_history (task_id, action, old_status, new_status, agent_id, notes)
             VALUES (?, 'rejected', ?, 'todo', ?, ?)
-        ''', (task_id, row[1], reviewer_id, f"Rejected by {reviewer_id or 'unknown'} -> todo (priority high). Loop {new_loop_count}. {reason or ''}"))
+        ''', (task_id, row[1], reviewer_id,
+              (f"Returned by {reviewer_id or 'unknown'} -> todo (priority high). No fix loop counted. {reason or ''}"
+               if no_loop_reject
+               else f"Rejected by {reviewer_id or 'unknown'} -> todo (priority high). Loop {new_loop_count}. {reason or ''}")))
         
         self.conn.commit()
+
+        try:
+            from sprint_status_sync import update_story_status
+            update_story_status(task_id, 'todo')
+        except Exception:
+            pass
         
-        print(f"🔄 Task {task_id} rejected -> todo (priority high) (fix loop {new_loop_count}/10)")
+        if no_loop_reject:
+            print(f"↩️ Task {task_id} returned -> todo (priority high) (no fix loop counted)")
+        else:
+            print(f"🔄 Task {task_id} rejected -> todo (priority high) (fix loop {new_loop_count}/10)")
         if reason:
             print(f"   Reason: {reason}")
         
@@ -862,7 +1051,7 @@ class AITeamDB:
             task_title=task_title,
             agent_id=original_assignee,
             agent_name=original_assignee,
-            reason=f"Rejected (loop {new_loop_count}/10). {reason or ''}"
+            reason=(f"Rejected (loop {new_loop_count}/10). {reason or ''}" if not no_loop_reject else f"Returned to todo (no loop). {reason or ''}")
         )
         
         return cursor.rowcount > 0
@@ -913,6 +1102,59 @@ class AITeamDB:
         )
         
         return cursor.rowcount > 0
+
+    def info_needed_task(self, task_id: str, details: str, actor: str = "system") -> bool:
+        """
+        Mark task as waiting for information (human input).
+        This is a blocked-attribute state for the task, but MUST NOT block the agent account.
+        """
+        if not details:
+            details = "Information required"
+        reason = f"Info needed: {details}"
+        cursor = self.conn.cursor()
+
+        cursor.execute('SELECT title, status, assignee_id FROM tasks WHERE id = ?', (task_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        task_title, old_status, assignee = row[0], row[1] or 'todo', row[2]
+
+        cursor.execute('''
+            UPDATE tasks
+            SET status = 'info_needed',
+                blocked_reason = ?,
+                blocked_at = datetime('now', 'localtime'),
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+        ''', (reason, task_id))
+
+        # Release any agent bound to this task so the pool can keep working.
+        cursor.execute('''
+            UPDATE agents
+            SET status = 'idle',
+                current_task_id = NULL,
+                updated_at = datetime('now', 'localtime')
+            WHERE current_task_id = ?
+        ''', (task_id,))
+
+        cursor.execute('''
+            INSERT INTO task_history (task_id, action, old_status, new_status, agent_id, notes)
+            VALUES (?, 'updated', ?, 'info_needed', ?, ?)
+        ''', (task_id, old_status, actor, reason))
+
+        self.conn.commit()
+
+        # Notify (same channel as block, but does not block the agent account)
+        self.notifier.notify(
+            event=NotificationEvent.BLOCK,
+            task_id=task_id,
+            task_title=task_title,
+            agent_id=assignee,
+            agent_name=assignee,
+            reason=reason
+        )
+
+        return True
     
     def unblock_task(self, task_id: str, agent_id: str = None) -> bool:
         """Unblock a task and resume (blocked -> in_progress)"""
@@ -990,6 +1232,12 @@ class AITeamDB:
         ''', (task_id, old_status, reason))
         
         self.conn.commit()
+
+        try:
+            from sprint_status_sync import update_story_status
+            update_story_status(task_id, 'backlog')
+        except Exception:
+            pass
         
         # Send Telegram notification using NotificationManager
         self.notifier.notify(
@@ -1918,6 +2166,14 @@ def main():
     reject.add_argument('task_id', help='Task ID')
     reject.add_argument('--reviewer', help='Reviewer agent ID')
     reject.add_argument('--reason', help='Reason for rejection (what needs to be fixed)')
+
+    requeue = task_sub.add_parser('requeue', help='Return task to todo with reason (no blocked). Use for unmet prerequisites discovered during work.')
+    requeue.add_argument('task_id', help='Task ID')
+    requeue.add_argument('--reason', required=True, help='Detailed reason (what is missing, what to do next)')
+
+    reopen = task_sub.add_parser('reopen', help='Reopen a done task back to todo (priority high)')
+    reopen.add_argument('task_id', help='Task ID')
+    reopen.add_argument('--reason', required=True, help='Reason for reopening')
     
     requirements = task_sub.add_parser('requirements', help='Update task requirements (prerequisites, acceptance criteria, goal)')
     requirements.add_argument('task_id', help='Task ID')
@@ -1931,6 +2187,7 @@ def main():
     check.add_argument('--index', type=int, required=True, help='1-based checklist item index')
     check.add_argument('--done', action='store_true', help='Mark as checked')
     check.add_argument('--undo', action='store_true', help='Mark as unchecked')
+    check.add_argument('--actor', choices=['agent', 'human'], default='agent', help='Who is checking this item (blocks HUMAN-only prerequisites unless actor=human)')
     
     show_reqs = task_sub.add_parser('show-requirements', help='Show task requirements')
     show_reqs.add_argument('task_id', help='Task ID')
@@ -2153,15 +2410,27 @@ def main():
                 if db.reject_review(args.task_id, args.reviewer, args.reason):
                     # Message printed by reject_review function
                     pass
+
+            elif args.task_action == 'requeue':
+                if db.requeue_to_todo(args.task_id, args.reason, actor='system'):
+                    print(f"↩️ Task {args.task_id} returned to todo (priority high)")
+                    print(f"   Reason: {args.reason}")
+            
+            elif args.task_action == 'reopen':
+                try:
+                    if db.reopen_task(args.task_id, args.reason, actor='system'):
+                        print(f"↩️ Task {args.task_id} reopened -> todo (priority high)")
+                        print(f"   Reason: {args.reason}")
+                except ValueError as e:
+                    print(f"⚠️ {e}")
                     
             elif args.task_action == 'block':
                 if db.block_task(args.task_id, args.reason):
                     print(f"⚠️ Task {args.task_id} blocked: {args.reason}")
 
             elif args.task_action == 'info-needed':
-                reason = f"Info needed: {args.details}"
-                if db.block_task(args.task_id, reason):
-                    print(f"🚫 Task {args.task_id} blocked - {reason}")
+                if db.info_needed_task(args.task_id, args.details, actor='system'):
+                    print(f"🚫 Task {args.task_id} marked as info_needed: {args.details}")
 
             elif args.task_action == 'backlog':
                 if db.backlog_task(args.task_id, args.reason):
@@ -2192,10 +2461,13 @@ def main():
                 else:
                     checked = True if not args.undo else False
                     field = 'prerequisites' if args.field == 'prerequisites' else 'acceptance_criteria'
-                    if db.checklist_update(args.task_id, args.field, args.index, checked):
-                        print(f"✅ Task {args.task_id} checklist updated: {field} #{args.index} -> {'checked' if checked else 'unchecked'}")
-                    else:
-                        print(f"⚠️ Task {args.task_id} not found or checklist update failed")
+                    try:
+                        if db.checklist_update(args.task_id, args.field, args.index, checked, actor=args.actor):
+                            print(f"✅ Task {args.task_id} checklist updated: {field} #{args.index} -> {'checked' if checked else 'unchecked'}")
+                        else:
+                            print(f"⚠️ Task {args.task_id} not found or checklist update failed")
+                    except ValueError as e:
+                        print(f"⚠️ {e}")
             
             elif args.task_action == 'show-requirements':
                 reqs = db.get_task_requirements(args.task_id)

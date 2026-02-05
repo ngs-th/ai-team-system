@@ -11,8 +11,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
 from agent_runtime import spawn_agent, get_runtime
+import time
 
 os.environ['TZ'] = 'Asia/Bangkok'
+try:
+    time.tzset()
+except AttributeError:
+    pass
 
 DB_PATH = Path(__file__).parent / "team.db"
 TELEGRAM_CHANNEL = "1268858185"
@@ -89,6 +94,60 @@ class AutoAssign:
             WHERE a.status = 'idle'
             AND (a.current_task_id IS NULL OR a.current_task_id = '')
             ORDER BY a.total_tasks_completed ASC
+        ''')
+        return [dict(row) for row in cursor.fetchall()]
+
+    def clear_idle_stale_current_tasks(self) -> int:
+        """Clear idle agents stuck with a current_task_id that is not their todo task."""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT a.id
+            FROM agents a
+            LEFT JOIN tasks t ON t.id = a.current_task_id
+            WHERE a.status = 'idle'
+              AND a.current_task_id IS NOT NULL
+              AND a.current_task_id != ''
+              AND (t.id IS NULL OR t.status != 'todo' OR t.assignee_id != a.id)
+        ''')
+        agent_ids = [row[0] for row in cursor.fetchall()]
+        if not agent_ids:
+            return 0
+
+        placeholders = ",".join(["?"] * len(agent_ids))
+        cursor.execute(f'''
+            UPDATE agents
+            SET current_task_id = NULL,
+                updated_at = datetime('now', 'localtime')
+            WHERE id IN ({placeholders})
+        ''', agent_ids)
+        self.conn.commit()
+        return len(agent_ids)
+
+    def get_assigned_todo_tasks_for_idle_agents(self) -> List[Dict]:
+        """Get todo tasks already assigned to idle agents (needs (re)spawn)."""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT t.id, t.title, t.description, t.priority, t.project_id,
+                   t.prerequisites, t.acceptance_criteria, t.expected_outcome, t.working_dir,
+                   t.review_feedback, t.review_feedback_at,
+                   a.id as agent_id, a.name as agent_name, a.role as agent_role,
+                   a.current_task_id as agent_current_task_id,
+                   ac.context, ac.learnings,
+                   t.updated_at
+            FROM tasks t
+            JOIN agents a ON t.assignee_id = a.id
+            LEFT JOIN agent_context ac ON a.id = ac.agent_id
+            WHERE t.status = 'todo'
+              AND a.status = 'idle'
+              AND (t.updated_at IS NULL OR t.updated_at < datetime('now', 'localtime', '-15 seconds'))
+            ORDER BY
+                CASE t.priority 
+                    WHEN 'critical' THEN 1
+                    WHEN 'high' THEN 2
+                    WHEN 'normal' THEN 3
+                    WHEN 'low' THEN 4
+                END,
+                t.updated_at ASC
         ''')
         return [dict(row) for row in cursor.fetchall()]
 
@@ -232,9 +291,12 @@ If prerequisites are a checklist, mark each item:
 ```bash
 python3 {base_dir}/team_db.py task check {task['id']} --field prerequisites --index <n> --done
 ```
+**HUMAN-only prerequisites** are marked with `@human` / `HUMAN:` / `🔒`.
+Do **NOT** check those as an agent. Instead, requeue the task and ask for the missing info.
+
 If any prerequisite is NOT met, stop work and send back to todo with clear reason:
 ```bash
-python3 {base_dir}/team_db.py task reject {task['id']} --reason "Prerequisite not met: <reason>"
+python3 {base_dir}/team_db.py task requeue {task['id']} --reason "Prerequisite not met: <reason (include exact detail)>"
 ```
 
 ### ✅ Acceptance Criteria (review will require all checked)
@@ -297,15 +359,36 @@ python3 {base_dir}/team_db.py task reject {task['id']} --reason "Prerequisite no
                         updated_at = datetime('now', 'localtime')
                     WHERE id = ?
                 ''', (runtime, task['id']))
-                cursor = self.conn.cursor()
                 cursor.execute('''
                     UPDATE agents
-                    SET status = 'active',
-                        last_heartbeat = datetime('now', 'localtime'),
+                    SET last_heartbeat = datetime('now', 'localtime'),
                         updated_at = datetime('now', 'localtime')
                     WHERE id = ?
                 ''', (agent['id'],))
                 self.conn.commit()
+
+                # Move card to Doing immediately after a successful spawn.
+                # Agent will verify prerequisites as their first step.
+                try:
+                    from team_db import AITeamDB
+                    db = AITeamDB(self.db_path)
+                    try:
+                        started = bool(db.start_task(task['id'], agent['id']))
+                    finally:
+                        db.close()
+                    if not started:
+                        # Keep system consistent: if we cannot start, release agent binding so scheduler can retry.
+                        cursor = self.conn.cursor()
+                        cursor.execute('''
+                            UPDATE agents
+                            SET status = 'idle',
+                                current_task_id = NULL,
+                                updated_at = datetime('now', 'localtime')
+                            WHERE id = ?
+                        ''', (agent['id'],))
+                        self.conn.commit()
+                except Exception:
+                    pass
                 print(f"  🚀 Agent run started for {agent['name']} ({task['id']}) (log: {details})")
             
             return True
@@ -333,6 +416,10 @@ python3 {base_dir}/team_db.py task reject {task['id']} --reason "Prerequisite no
         """Main auto-assign logic"""
         print("🤖 AI Team Auto-Assign with Context Starting...")
         print("=" * 60)
+
+        cleared = self.clear_idle_stale_current_tasks()
+        if cleared:
+            print(f"🧹 Cleared stale current_task_id for {cleared} idle agents")
         
         idle_agents = self.get_idle_agents()
         todo_tasks = self.get_unassigned_todo_tasks()
@@ -340,51 +427,82 @@ python3 {base_dir}/team_db.py task reject {task['id']} --reason "Prerequisite no
         print(f"\n📊 Status:")
         print(f"   Idle agents: {len(idle_agents)}")
         print(f"   Unassigned tasks: {len(todo_tasks)}")
-        
-        if not idle_agents:
-            print("\n⚠️ No idle agents available")
-            return {'assigned': 0, 'agents': 0, 'tasks': len(todo_tasks)}
-        
-        if not todo_tasks:
-            print("\n✅ No unassigned tasks")
-            return {'assigned': 0, 'agents': len(idle_agents), 'tasks': 0}
-        
+
         assigned_count = 0
         assigned_pairs = []
-        
-        for task in todo_tasks:
-            if not idle_agents:
-                break
-            
-            best_agent = self.find_best_agent(task, idle_agents)
-            if not best_agent:
-                best_agent = idle_agents[0]
-            
-            print(f"\n📝 Task: {task['id']}")
-            print(f"   Title: {task['title']}")
-            print(f"   → Agent: {best_agent['name']} (match score: context + role)")
-            
-            if self.assign_task(task['id'], best_agent['id']):
-                if self.spawn_subagent(task, best_agent):
-                    assigned_count += 1
-                    assigned_pairs.append({
-                        'task': task['id'],
-                        'agent': best_agent['name']
-                    })
-                    idle_agents = [a for a in idle_agents if a['id'] != best_agent['id']]
-        
-        if assigned_count > 0:
-            message = f"🤖 *Auto-Assigned {assigned_count} Tasks*\n\n"
-            for pair in assigned_pairs:
-                message += f"• {pair['task']} → {pair['agent']}\n"
-            message += f"\n⏰ {datetime.now().strftime('%H:%M')}"
-            self.send_notification(message)
-        
-        print("\n" + "=" * 60)
-        print(f"✅ Auto-assign complete: {assigned_count} tasks")
-        
+
+        if not idle_agents:
+            print("\n⚠️ No idle agents available")
+        elif not todo_tasks:
+            print("\n✅ No unassigned tasks")
+        else:
+            for task in todo_tasks:
+                if not idle_agents:
+                    break
+
+                best_agent = self.find_best_agent(task, idle_agents)
+                if not best_agent:
+                    best_agent = idle_agents[0]
+
+                print(f"\n📝 Task: {task['id']}")
+                print(f"   Title: {task['title']}")
+                print(f"   → Agent: {best_agent['name']} (match score: context + role)")
+
+                if self.assign_task(task['id'], best_agent['id']):
+                    if self.spawn_subagent(task, best_agent):
+                        assigned_count += 1
+                        assigned_pairs.append({
+                            'task': task['id'],
+                            'agent': best_agent['name']
+                        })
+                        idle_agents = [a for a in idle_agents if a['id'] != best_agent['id']]
+
+            if assigned_count > 0:
+                message = f"🤖 *Auto-Assigned {assigned_count} Tasks*\n\n"
+                for pair in assigned_pairs:
+                    message += f"• {pair['task']} → {pair['agent']}\n"
+                message += f"\n⏰ {datetime.now().strftime('%H:%M')}"
+                self.send_notification(message)
+
+            print("\n" + "=" * 60)
+            print(f"✅ Auto-assign complete: {assigned_count} tasks")
+
+        # Re-dispatch tasks already assigned to idle agents
+        assigned_todo = self.get_assigned_todo_tasks_for_idle_agents()
+        redisp_count = 0
+        if assigned_todo:
+            print(f"\n🔁 Re-dispatch assigned todo tasks: {len(assigned_todo)}")
+            used_agents = set()
+            for task in assigned_todo:
+                agent_id = task['agent_id']
+                current_task_id = task.get('agent_current_task_id') or ''
+                if agent_id in used_agents:
+                    continue
+                if current_task_id and current_task_id != task['id']:
+                    continue
+                agent = {
+                    'id': agent_id,
+                    'name': task['agent_name'],
+                    'role': task['agent_role'],
+                    'context': task.get('context') or '',
+                    'learnings': task.get('learnings') or '',
+                }
+                if self.spawn_subagent(task, agent):
+                    redisp_count += 1
+                    used_agents.add(agent_id)
+                    if not current_task_id:
+                        cursor = self.conn.cursor()
+                        cursor.execute('''
+                            UPDATE agents
+                            SET current_task_id = ?,
+                                updated_at = datetime('now', 'localtime')
+                            WHERE id = ?
+                        ''', (task['id'], agent_id))
+                        self.conn.commit()
+            print(f"✅ Re-dispatch complete: {redisp_count} tasks")
+
         return {
-            'assigned': assigned_count,
+            'assigned': assigned_count + redisp_count,
             'agents': len(idle_agents) + assigned_count,
             'tasks': len(todo_tasks)
         }
